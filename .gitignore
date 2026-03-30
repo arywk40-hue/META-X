@@ -1,0 +1,13 @@
+.env
+.pytest_cache/
+__pycache__/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
