@@ -1,3 +1,16 @@
+---
+title: Code Review Env
+emoji: 🔍
+colorFrom: blue
+colorTo: green
+sdk: docker
+pinned: false
+tags:
+  - openenv
+  - rl-environment
+  - code-review
+---
+
 # OpenEnv RL Environment Template
 
 This repository is a production-ready starter for the Meta PyTorch OpenEnv Hackathon. It ships with a full FastAPI environment, deterministic tasks and graders, dense reward shaping, a baseline agent runner, and a test suite that can be swapped to the final domain on problem day.
