@@ -3,31 +3,35 @@
 import pytest
 
 from environment import Action, Observation
+from environment.tasks import TASKS
 
 
 def test_reset_returns_valid_observation(sample_env) -> None:
-    observation = sample_env.reset("runtime_bug")
+    observation = sample_env.reset("null_filling")
     assert isinstance(observation, Observation)
-    assert observation.task_id == "runtime_bug"
+    assert observation.task_id == "null_filling"
     assert observation.step == 0
-    assert observation.attempts_remaining == 3
+    assert observation.attempts_remaining == 5
 
 
 def test_step_advances_state_and_returns_reward(sample_env) -> None:
-    sample_env.reset("runtime_bug")
+    sample_env.reset("null_filling")
     action = Action(
-        bug_line=6,
-        bug_type="runtime",
-        explanation="The empty list case causes division by zero.",
+        action_type="fill_missing",
+        row_index=1,
+        column="age",
+        new_value="unknown",
+        reason="The age value is missing.",
     )
     observation, reward, done, info = sample_env.step(action)
     state = sample_env.state()
 
     assert state["step_count"] == 1
-    assert reward.value >= 0.85
-    assert done is True
-    assert info["solved"] is True
+    assert reward.value > 0.0
+    assert done is False
+    assert info["solved"] is False
     assert observation.step == 1
+    assert observation.issues_remaining == 2
 
 
 def test_state_requires_active_episode(sample_env) -> None:
@@ -36,43 +40,58 @@ def test_state_requires_active_episode(sample_env) -> None:
 
 
 def test_done_episode_requires_reset(sample_env) -> None:
-    sample_env.reset("runtime_bug")
+    sample_env.reset("adversarial_sensor")
     sample_env.step(
         Action(
-            bug_line=6,
-            bug_type="runtime",
-            explanation="The code divides by len(numbers) on an empty list, causing division by zero.",
+            action_type="fill_missing",
+            row_index=2,
+            column="reading",
+            new_value=None,
+            reason="The reading is missing.",
+        )
+    )
+    sample_env.step(
+        Action(
+            action_type="flag_anomaly",
+            row_index=5,
+            column="reading",
+            new_value=None,
+            reason="999C is an impossible outlier.",
         )
     )
 
     with pytest.raises(RuntimeError):
         sample_env.step(
             Action(
-                bug_line=6,
-                bug_type="runtime",
-                explanation="Trying again after the episode ended.",
+                action_type="flag_anomaly",
+                row_index=0,
+                column="reading",
+                new_value=None,
+                reason="Trying again after the episode ended.",
             )
         )
 
 
 def test_reset_without_task_id_picks_a_registered_task(sample_env) -> None:
     observation = sample_env.reset(seed=7)
-    assert observation.task_id in {"runtime_bug", "binary_search_logic", "security_vulnerability"}
+    assert observation.task_id in TASKS
 
 
 def test_episode_terminates_after_three_attempts(sample_env) -> None:
-    observation = sample_env.reset("binary_search_logic")
+    observation = sample_env.reset("null_filling")
     done = False
     while not done:
         observation, reward, done, info = sample_env.step(
             Action(
-                bug_line=1,
-                bug_type="syntax",
-                explanation="This is not the real bug.",
+                action_type="flag_anomaly",
+                row_index=0,
+                column="name",
+                new_value=None,
+                reason="This is not a real issue.",
             )
         )
 
     state = sample_env.state()
     assert state["done"] is True
-    assert state["step_count"] == 3
+    assert state["step_count"] == 5
     assert state["attempts_remaining"] == 0

@@ -1,11 +1,12 @@
-name: openenv-template
+name: data-cleaning-env
 version: 1.0.0
-description: Python code review OpenEnv environment for reinforcement learning and agent evaluation.
-author: MetaX
+description: Data cleaning OpenEnv environment for reinforcement learning and agent evaluation.
+author: Ariyan Bhakat
 tags:
   - openenv
-  - code-review
+  - data-cleaning
   - rl-environment
+  - tabular-data
 entrypoint: app:app
 port: 7860
 endpoints:
@@ -18,15 +19,23 @@ endpoints:
   grader: /grader
   baseline: /baseline
 tasks:
-  - id: runtime_bug
-    name: Runtime Bug Review
+  - id: null_filling
+    name: Missing Value Repair
     difficulty: easy
-    max_steps: 3
-  - id: binary_search_logic
-    name: Binary Search Logic Review
+    max_steps: 5
+  - id: format_standardization
+    name: Date and Currency Standardization
     difficulty: medium
-    max_steps: 3
-  - id: security_vulnerability
-    name: Security Vulnerability Review
+    max_steps: 8
+  - id: duplicate_outlier
+    name: Duplicate and Outlier Removal
+    difficulty: medium
+    max_steps: 8
+  - id: multi_layer_pipeline
+    name: Multi-Layer Order Data Pipeline
     difficulty: hard
-    max_steps: 3
+    max_steps: 12
+  - id: adversarial_sensor
+    name: Adversarial Sensor Data
+    difficulty: hard
+    max_steps: 8

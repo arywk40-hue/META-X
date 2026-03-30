@@ -1,92 +1,157 @@
-"""Deterministic graders for each code review task."""
+"""Deterministic graders for the data-cleaning environment."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any, Callable
-
-from .tasks import get_task
 
 
 GraderFunction = Callable[[list[dict[str, Any]]], float]
 
 
-def score_bug_report(
-    action: Mapping[str, Any],
-    answer: Mapping[str, Any],
-    step_number: int,
-) -> tuple[float, float, dict[str, float]]:
-    """Score a single attempt using the environment's exact reward rubric."""
-    bug_line = action.get("bug_line")
-    bug_type = action.get("bug_type")
-    explanation = str(action.get("explanation") or "").lower()
-
-    line_score = 0.0
-    type_score = 0.0
-    explanation_score = 0.0
-    bonus_score = 0.0
-
-    if bug_line == answer["bug_line"]:
-        line_score = 0.4
-    elif isinstance(bug_line, int) and abs(bug_line - answer["bug_line"]) <= 1:
-        line_score = 0.15
-
-    if bug_type == answer["bug_type"]:
-        type_score = 0.3
-
-    if any(term in explanation for term in answer["key_terms"]):
-        explanation_score = 0.3
-
-    partial_credit = min(1.0, line_score + type_score + explanation_score)
-    total = partial_credit
-
-    if total >= 1.0 and step_number == 1:
-        bonus_score = 0.3
-        total += bonus_score
-    elif total >= 1.0 and step_number == 2:
-        bonus_score = 0.1
-        total += bonus_score
-
-    total = max(0.0, min(1.0, total))
-    return total, partial_credit, {
-        "line_score": line_score,
-        "type_score": type_score,
-        "explanation_score": explanation_score,
-        "bonus_score": bonus_score,
-    }
+def _actions_from_history(episode_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [step.get("action", {}) for step in episode_history]
 
 
-def _grade_code_review(task_id: str, episode_history: list[dict[str, Any]]) -> float:
-    if not episode_history:
-        return 0.0
+def _grade_null_filling(episode_history: list[dict[str, Any]]) -> float:
+    actions = _actions_from_history(episode_history)
+    fixed = set()
 
-    answer = get_task(task_id).config["answer"]
-    best_score = 0.0
+    for action in actions:
+        col = action.get("column", "")
+        row = action.get("row_index")
+        atype = action.get("action_type", "")
+        val = action.get("new_value")
 
-    for step_number, step in enumerate(episode_history, start=1):
-        action = step.get("action", {})
-        score, _, _ = score_bug_report(action, answer, step_number)
-        best_score = max(best_score, score)
+        if atype in ("fill_missing", "fix_value"):
+            if row == 1 and col == "age" and val is not None:
+                fixed.add("age_1")
+            if row == 2 and col == "age" and val is not None and str(val).upper() != "NULL":
+                fixed.add("age_2")
+            if row == 4 and col == "email" and val is not None and "@" in str(val):
+                fixed.add("email_4")
 
-    return best_score
-
-
-def _grade_runtime_bug(episode_history: list[dict[str, Any]]) -> float:
-    return _grade_code_review("runtime_bug", episode_history)
-
-
-def _grade_binary_search_logic(episode_history: list[dict[str, Any]]) -> float:
-    return _grade_code_review("binary_search_logic", episode_history)
+    return round(len(fixed) / 3, 4)
 
 
-def _grade_security_vulnerability(episode_history: list[dict[str, Any]]) -> float:
-    return _grade_code_review("security_vulnerability", episode_history)
+def _grade_format_standardization(episode_history: list[dict[str, Any]]) -> float:
+    import re
+
+    iso_re = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    actions = _actions_from_history(episode_history)
+    fixed = set()
+
+    for action in actions:
+        col = action.get("column", "")
+        row = action.get("row_index")
+        atype = action.get("action_type", "")
+        val = str(action.get("new_value", "") or "")
+
+        if atype in ("standardize_format", "fix_value"):
+            if col == "date" and row in (1, 2, 4) and iso_re.match(val):
+                fixed.add(f"date_{row}")
+            if col == "currency" and row == 1 and val == "USD":
+                fixed.add("currency_1")
+            if col == "currency" and row == 3 and val == "USD":
+                fixed.add("currency_3")
+
+    return round(len(fixed) / 5, 4)
+
+
+def _grade_duplicate_outlier(episode_history: list[dict[str, Any]]) -> float:
+    actions = _actions_from_history(episode_history)
+    fixed = set()
+
+    for action in actions:
+        col = action.get("column", "")
+        row = action.get("row_index")
+        atype = action.get("action_type", "")
+        val = str(action.get("new_value", "") or "").lower()
+
+        if atype == "drop_row" and row == 1:
+            fixed.add("duplicate")
+        if atype in ("flag_anomaly", "fix_value") and row == 2 and col == "amount":
+            fixed.add("outlier")
+        if atype == "fix_value" and row == 3 and col == "amount":
+            try:
+                if float(action.get("new_value", -1)) >= 0:
+                    fixed.add("negative")
+            except (TypeError, ValueError):
+                pass
+        if atype in ("fix_value", "standardize_format") and row == 5 and col == "status" and val == "completed":
+            fixed.add("case")
+
+    return round(len(fixed) / 4, 4)
+
+
+def _grade_multi_layer(episode_history: list[dict[str, Any]]) -> float:
+    import re
+
+    actions = _actions_from_history(episode_history)
+    fixed = set()
+
+    for action in actions:
+        col = action.get("column", "")
+        row = action.get("row_index")
+        atype = action.get("action_type", "")
+        val = action.get("new_value")
+
+        if atype == "fix_value" and row == 1 and col == "qty":
+            try:
+                if float(val) >= 0:
+                    fixed.add("qty_1")
+            except (TypeError, ValueError):
+                pass
+        if atype in ("flag_anomaly", "fix_value", "drop_row") and row == 2 and col == "customer_id":
+            fixed.add("fk_customer")
+        if atype in ("flag_anomaly", "fix_value") and row == 2 and col == "unit_price":
+            try:
+                if float(val or 0) > 0:
+                    fixed.add("zero_price")
+            except (TypeError, ValueError):
+                pass
+        if atype in ("flag_anomaly", "fix_value", "drop_row") and row == 3 and col == "product_id":
+            fixed.add("fk_product")
+        if atype in ("flag_anomaly", "fix_value") and row == 3 and col == "order_dt":
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", str(val or "")):
+                fixed.add("bad_date")
+        if atype in ("flag_anomaly", "drop_row") and row == 4 and col == "qty":
+            fixed.add("qty_outlier")
+        if atype == "drop_row" and row == 5:
+            fixed.add("duplicate")
+
+    base = len(fixed) / 7
+    bonus = 0.1 if len(fixed) == 7 and len(actions) <= 7 else 0.0
+    return round(min(1.0, base + bonus), 4)
+
+
+def _grade_adversarial(episode_history: list[dict[str, Any]]) -> float:
+    actions = _actions_from_history(episode_history)
+    trap_rows = {0, 1, 4}
+    real_issues = {(2, "reading"), (5, "reading")}
+    fixed_real = set()
+    penalized_traps = set()
+
+    for action in actions:
+        col = action.get("column", "")
+        row = action.get("row_index")
+        atype = action.get("action_type", "")
+
+        if atype in ("fix_value", "flag_anomaly", "fill_missing"):
+            if (row, col) in real_issues:
+                fixed_real.add((row, col))
+            if row in trap_rows and col == "reading":
+                penalized_traps.add(row)
+
+    score = len(fixed_real) * 0.5 - len(penalized_traps) * 0.3
+    return round(max(0.0, min(1.0, score)), 4)
 
 
 GRADERS: dict[str, GraderFunction] = {
-    "runtime_bug": _grade_runtime_bug,
-    "binary_search_logic": _grade_binary_search_logic,
-    "security_vulnerability": _grade_security_vulnerability,
+    "null_filling": _grade_null_filling,
+    "format_standardization": _grade_format_standardization,
+    "duplicate_outlier": _grade_duplicate_outlier,
+    "multi_layer_pipeline": _grade_multi_layer,
+    "adversarial_sensor": _grade_adversarial,
 }
 
 
@@ -100,5 +165,5 @@ def grade_episode(task_id: str, episode_history: list[dict[str, Any]]) -> float:
     grader = get_grader(task_id)
     score = float(grader(episode_history))
     if not 0.0 <= score <= 1.0:
-        raise RuntimeError(f"Grader returned invalid score: {score}")
+        raise RuntimeError(f"Grader returned out-of-range score: {score}")
     return score

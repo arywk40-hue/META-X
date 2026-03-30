@@ -1,4 +1,4 @@
-"""Baseline agent runner for the code review environment."""
+"""Baseline agent runner for the data-cleaning environment."""
 
 from __future__ import annotations
 
@@ -151,17 +151,48 @@ class BaselineAgent:
         return Action.from_llm_output(output_text, observation.available_actions)
 
     def _heuristic_action(self, observation) -> Action:
-        answer = get_task(observation.task_id).config["answer"]
-        explanation = {
-            "runtime_bug": "The function divides by len(numbers) without handling the empty list case, so it can raise a ZeroDivisionError.",
-            "binary_search_logic": "The loop uses a strict less-than condition, which skips the final candidate and causes an off-by-one logic bug.",
-            "security_vulnerability": "The SQL query is built with an f-string from user input instead of using parameters, which enables SQL injection.",
-        }[observation.task_id]
-        return Action(
-            bug_line=answer["bug_line"],
-            bug_type=answer["bug_type"],
-            explanation=explanation,
-        )
+        step = observation.step
+        task_id = observation.task_id
+
+        if task_id == "null_filling":
+            actions = [
+                {"action_type": "fill_missing", "row_index": 1, "column": "age", "new_value": "unknown", "reason": "row 1 age is missing"},
+                {"action_type": "fix_value", "row_index": 2, "column": "age", "new_value": "unknown", "reason": "literal NULL should be normalized"},
+                {"action_type": "fill_missing", "row_index": 4, "column": "email", "new_value": "missing@example.com", "reason": "row 4 email is missing"},
+            ]
+        elif task_id == "format_standardization":
+            actions = [
+                {"action_type": "standardize_format", "row_index": 1, "column": "date", "new_value": "2024-01-15", "reason": "normalize slash date to ISO"},
+                {"action_type": "standardize_format", "row_index": 2, "column": "date", "new_value": "2024-01-15", "reason": "normalize month-name date to ISO"},
+                {"action_type": "standardize_format", "row_index": 4, "column": "date", "new_value": "2024-01-15", "reason": "normalize US date to ISO"},
+                {"action_type": "fix_value", "row_index": 1, "column": "currency", "new_value": "USD", "reason": "uppercase 3-letter currency code"},
+                {"action_type": "fix_value", "row_index": 3, "column": "currency", "new_value": "USD", "reason": "standardize full currency name"},
+            ]
+        elif task_id == "duplicate_outlier":
+            actions = [
+                {"action_type": "drop_row", "row_index": 1, "column": "row_id", "new_value": None, "reason": "exact duplicate of row 0"},
+                {"action_type": "flag_anomaly", "row_index": 2, "column": "amount", "new_value": None, "reason": "amount is an outlier"},
+                {"action_type": "fix_value", "row_index": 3, "column": "amount", "new_value": 50.00, "reason": "negative amount should be non-negative"},
+                {"action_type": "standardize_format", "row_index": 5, "column": "status", "new_value": "completed", "reason": "normalize status casing"},
+            ]
+        elif task_id == "multi_layer_pipeline":
+            actions = [
+                {"action_type": "fix_value", "row_index": 1, "column": "qty", "new_value": 1, "reason": "quantity cannot be negative"},
+                {"action_type": "flag_anomaly", "row_index": 2, "column": "customer_id", "new_value": None, "reason": "customer id is invalid"},
+                {"action_type": "fix_value", "row_index": 2, "column": "unit_price", "new_value": 1.0, "reason": "price cannot be zero"},
+                {"action_type": "flag_anomaly", "row_index": 3, "column": "product_id", "new_value": None, "reason": "product id is invalid"},
+                {"action_type": "fix_value", "row_index": 3, "column": "order_dt", "new_value": "2024-01-01", "reason": "repair invalid month in date"},
+                {"action_type": "flag_anomaly", "row_index": 4, "column": "qty", "new_value": None, "reason": "quantity is a statistical outlier"},
+                {"action_type": "drop_row", "row_index": 5, "column": "row_id", "new_value": None, "reason": "exact duplicate of row 0"},
+            ]
+        else:
+            actions = [
+                {"action_type": "fill_missing", "row_index": 2, "column": "reading", "new_value": None, "reason": "reading is missing"},
+                {"action_type": "flag_anomaly", "row_index": 5, "column": "reading", "new_value": None, "reason": "999C is an impossible outlier"},
+            ]
+
+        chosen = actions[min(step, len(actions) - 1)]
+        return Action.model_validate(chosen)
 
 
 def run_baseline(
@@ -180,7 +211,7 @@ def run_baseline(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the code review baseline agent.")
+    parser = argparse.ArgumentParser(description="Run the data-cleaning baseline agent.")
     parser.add_argument("--task-id", dest="task_ids", action="append", help="Task ID to run. Repeat for multiple.")
     parser.add_argument("--model", default="gpt-4o-mini", help="OpenAI model to use when OPENAI_API_KEY is set.")
     parser.add_argument("--episodes", type=int, default=1, help="Episodes per task.")

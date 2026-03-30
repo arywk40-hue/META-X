@@ -36,25 +36,22 @@ def _score_to_grade(score: float) -> str:
 
 
 def _grader_breakdown(task_id: str, episode_history: list[dict[str, Any]], score: float) -> dict[str, float]:
-    if task_id == "easy_01":
-        total = sum(1 for step in episode_history if not step.get("evaluation", {}).get("skipped"))
-        return {
-            "correctness": score,
-            "efficiency": min(1.0, total / max(1, len(episode_history))),
-            "completeness": min(1.0, len(episode_history) / 10),
-        }
-    if task_id == "medium_01":
-        violations = sum(1 for step in episode_history if step.get("evaluation", {}).get("constraint_violation"))
-        return {
-            "correctness": score,
-            "efficiency": max(0.0, 1.0 - (violations * 0.1)),
-            "completeness": min(1.0, len(episode_history) / 8),
-        }
-    verify_used = sum(1 for step in episode_history if step.get("action", {}).get("action_type") == "verify")
+    attempts_used = len(episode_history)
+    corrective_actions = sum(
+        1
+        for step in episode_history
+        if int(step.get("reward_detail", {}).get("issues_fixed_this_step", 0)) > 0
+    )
+    trap_free_steps = sum(
+        1
+        for step in episode_history
+        if not bool(step.get("info", {}).get("trap_penalty", False))
+    )
     return {
-        "correctness": score,
-        "efficiency": max(0.0, 1.0 - (verify_used * 0.1)),
-        "completeness": min(1.0, len(episode_history) / 10),
+        "issue_coverage": score,
+        "efficiency": max(0.0, 1.0 - ((max(attempts_used - 1, 0)) * 0.2)),
+        "action_precision": min(1.0, corrective_actions / max(1, attempts_used)),
+        "safety": min(1.0, trap_free_steps / max(1, attempts_used)),
     }
 
 
@@ -85,9 +82,9 @@ def create_app(
     environment_type = (environment or OpenEnv()).__class__
     runtime_config = _runtime_config()
     app = FastAPI(
-        title="OpenEnv RL Environment Template",
+        title="OpenEnv Data Cleaning Environment",
         version=APP_VERSION,
-        description="Meta PyTorch Hackathon OpenEnv-compatible environment scaffold.",
+        description="A production-style OpenEnv benchmark for data cleaning and dataset repair.",
     )
     app.state.sessions: dict[str, OpenEnv] = {}
     app.state.websocket_sessions: set[str] = set()
@@ -133,7 +130,7 @@ def create_app(
     def health() -> dict[str, Any]:
         return {
             "status": "healthy",
-            "environment": "openenv-template",
+            "environment": "data-cleaning-env",
             "version": APP_VERSION,
             "timestamp": _utc_timestamp(),
             "tasks_loaded": len(TASKS),

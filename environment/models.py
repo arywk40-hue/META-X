@@ -1,4 +1,4 @@
-"""Shared Pydantic models and task definitions for the code review environment."""
+"""Pydantic models for the data-cleaning environment."""
 
 from __future__ import annotations
 
@@ -13,44 +13,48 @@ from pydantic import BaseModel, Field, field_validator
 
 
 def utc_now() -> datetime:
-    """Return a timezone-aware UTC timestamp."""
     return datetime.now(timezone.utc)
 
 
 ACTION_SCHEMA = {
     "type": "object",
     "properties": {
-        "bug_line": {"type": "integer", "description": "Line number of the bug"},
-        "bug_type": {
+        "action_type": {
             "type": "string",
-            "enum": ["syntax", "runtime", "logic", "security"],
+            "enum": [
+                "fix_value",
+                "drop_row",
+                "fill_missing",
+                "cast_type",
+                "rename_column",
+                "flag_anomaly",
+                "standardize_format",
+            ],
         },
-        "explanation": {"type": "string", "description": "Why this is a bug"},
+        "row_index": {
+            "type": "integer",
+            "description": "0-based row index (null for column-level actions)",
+        },
+        "column": {"type": "string", "description": "Column name to act on"},
+        "new_value": {"description": "Replacement value (string, number, or null)"},
+        "reason": {"type": "string", "description": "One-sentence justification"},
     },
-    "required": ["bug_line", "bug_type", "explanation"],
+    "required": ["action_type", "column", "reason"],
 }
 
 
 class Difficulty(str, Enum):
-    """Difficulty bucket used by tasks and API payloads."""
-
     EASY = "easy"
     MEDIUM = "medium"
     HARD = "hard"
 
     @property
     def level(self) -> int:
-        return {
-            Difficulty.EASY: 1,
-            Difficulty.MEDIUM: 2,
-            Difficulty.HARD: 3,
-        }[self]
+        return {"easy": 1, "medium": 2, "hard": 3}[self.value]
 
 
 @dataclass(slots=True)
 class Task:
-    """Immutable task definition loaded at startup."""
-
     id: str
     name: str
     description: str
@@ -64,8 +68,6 @@ class Task:
     def __post_init__(self) -> None:
         if not self.id:
             raise ValueError("Task id cannot be empty")
-        if not self.name:
-            raise ValueError("Task name cannot be empty")
         if self.max_steps <= 0:
             raise ValueError("max_steps must be positive")
         if self.target_score_range == (0.0, 1.0):
@@ -76,7 +78,6 @@ class Task:
             }[self.difficulty]
 
     def summary(self) -> dict[str, Any]:
-        """Return the public task descriptor without leaking the answer key."""
         return {
             "id": self.id,
             "task_id": self.id,
@@ -88,69 +89,69 @@ class Task:
             "target_score_range": list(self.target_score_range),
             "tags": self.tags,
             "success_criteria": self.success_criteria,
-            "code_snippet": self.config.get("code_snippet", ""),
+            "dataset_preview": self.config.get("dataset_preview", ""),
         }
 
 
-class CodeReviewAction(BaseModel):
-    """Structured bug report submitted by the agent."""
+class DataCleaningAction(BaseModel):
+    action_type: str
+    row_index: int | None = Field(default=None, ge=0)
+    column: str
+    new_value: Any = None
+    reason: str = Field(..., min_length=1)
 
-    bug_line: int = Field(..., ge=1, description="Line number where the bug appears")
-    bug_type: str = Field(..., description="One of syntax, runtime, logic, security")
-    explanation: str = Field(..., min_length=1, description="Concise explanation of the bug")
-
-    @field_validator("bug_type")
+    @field_validator("action_type")
     @classmethod
-    def validate_bug_type(cls, value: str) -> str:
-        cleaned = value.strip().lower()
-        if cleaned not in {"syntax", "runtime", "logic", "security"}:
-            raise ValueError("bug_type must be one of syntax, runtime, logic, security")
+    def validate_action_type(cls, v: str) -> str:
+        valid = {
+            "fix_value",
+            "drop_row",
+            "fill_missing",
+            "cast_type",
+            "rename_column",
+            "flag_anomaly",
+            "standardize_format",
+        }
+        cleaned = v.strip().lower()
+        if cleaned not in valid:
+            raise ValueError(f"action_type must be one of {sorted(valid)}")
         return cleaned
 
-    @field_validator("explanation")
+    @field_validator("reason")
     @classmethod
-    def validate_explanation(cls, value: str) -> str:
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("explanation cannot be empty")
-        return cleaned
+    def validate_reason(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("reason cannot be empty")
+        return v.strip()
 
     @classmethod
     def from_llm_output(
         cls,
         text: str,
         available_actions: list[str] | None = None,
-    ) -> "CodeReviewAction":
-        """Parse flexible model output into a structured bug report."""
+    ) -> "DataCleaningAction":
         candidate = text.strip()
         if not candidate:
             return cls(
-                bug_line=1,
-                bug_type="logic",
-                explanation="No valid answer was produced.",
+                action_type="flag_anomaly",
+                column="unknown",
+                reason="No valid action produced.",
             )
 
         candidate = candidate.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        json_match = re.search(r"\{.*\}", candidate, re.DOTALL)
-        if json_match:
-            candidate = json_match.group(0)
+        match = re.search(r"\{.*\}", candidate, re.DOTALL)
+        if match:
+            candidate = match.group(0)
 
         try:
             data = json.loads(candidate)
-        except json.JSONDecodeError:
-            line_match = re.search(r"line\s*(\d+)", candidate, re.IGNORECASE)
-            type_match = re.search(
-                r"\b(syntax|runtime|logic|security)\b",
-                candidate,
-                re.IGNORECASE,
-            )
+            return cls.model_validate(data)
+        except Exception:
             return cls(
-                bug_line=int(line_match.group(1)) if line_match else 1,
-                bug_type=type_match.group(1).lower() if type_match else "logic",
-                explanation=candidate,
+                action_type="flag_anomaly",
+                column="unknown",
+                reason=candidate[:200],
             )
-
-        return cls.model_validate(data)
 
     @classmethod
     def model_json_schema(
@@ -160,59 +161,55 @@ class CodeReviewAction(BaseModel):
         schema_generator: Any = None,
         mode: str = "validation",
     ) -> dict[str, Any]:
-        """Return the exact public schema exposed at /tasks."""
         return dict(ACTION_SCHEMA)
 
 
-class CodeReviewObservation(BaseModel):
-    """Observation returned by reset() and step()."""
-
-    done: bool = Field(default=False, description="Episode completion flag")
-    code_snippet: str = Field(..., description="Python code snippet with line numbers")
-    task_id: str = Field(..., description="Unique identifier for the current task")
-    attempts_remaining: int = Field(..., ge=0, description="Remaining attempts before episode termination")
-    feedback: str = Field(default="", description="Human-readable feedback for the last attempt")
-    feedback_history: list[str] = Field(default_factory=list, description="All previous feedback messages")
-    task_name: str = Field(..., description="Human-readable task name")
-    task_description: str = Field(..., description="Full description of the task objective")
-    step: int = Field(..., ge=0, description="Current step number in episode")
-    max_steps: int = Field(..., gt=0, description="Maximum attempts allowed for this task")
-    available_actions: list[str] = Field(default_factory=list, description="Valid action types for the current state")
-    context: str = Field(default="", description="Human-readable context for the reviewer")
-    timestamp: datetime = Field(default_factory=utc_now, description="Observation timestamp")
+class DataCleaningObservation(BaseModel):
+    done: bool = False
+    task_id: str
+    task_name: str
+    task_description: str
+    dataset_preview: str
+    issues_remaining: int = 0
+    step: int = Field(..., ge=0)
+    max_steps: int = Field(..., gt=0)
+    attempts_remaining: int = Field(..., ge=0)
+    feedback: str = ""
+    feedback_history: list[str] = Field(default_factory=list)
+    available_actions: list[str] = Field(default_factory=list)
+    context: str = ""
+    timestamp: datetime = Field(default_factory=utc_now)
 
     def to_prompt(self) -> str:
-        """Convert the observation into an LLM-friendly prompt."""
         history = "\n".join(self.feedback_history) if self.feedback_history else "None"
         return (
             f"Task: {self.task_name}\n"
             f"Description: {self.task_description}\n"
-            f"Attempt: {self.step + 1} of {self.max_steps}\n"
-            f"Attempts Remaining: {self.attempts_remaining}\n"
-            f"Feedback History:\n{history}\n\n"
-            f"Code Snippet:\n{self.code_snippet}\n\n"
-            "Respond with JSON only: "
-            '{"bug_line": <int>, "bug_type": "syntax|runtime|logic|security", "explanation": "<concise explanation>"}'
+            f"Step: {self.step + 1} of {self.max_steps} | "
+            f"Issues remaining: {self.issues_remaining}\n"
+            f"Previous feedback:\n{history}\n\n"
+            f"Current dataset:\n{self.dataset_preview}\n\n"
+            f"Available action types: {', '.join(self.available_actions)}\n\n"
+            "Respond with valid JSON only — no prose, no markdown:\n"
+            '{"action_type": "fix_value", "row_index": 2, "column": "email", '
+            '"new_value": "user@example.com", "reason": "row 2 email is missing"}'
         )
 
 
-class CodeReviewReward(BaseModel):
-    """Dense reward returned after each environment step."""
+class DataCleaningReward(BaseModel):
+    value: float = Field(..., ge=0.0, le=1.0)
+    issues_fixed_this_step: int = Field(default=0, ge=0)
+    issues_remaining: int = Field(default=0, ge=0)
+    solved: bool = False
+    attempts_used: int = Field(..., ge=0)
 
-    value: float = Field(..., ge=0.0, le=1.0, description="Reward normalized to [0, 1]")
-    partial_credit: float = Field(..., ge=0.0, le=1.0, description="Score before attempt bonus")
-    solved: bool = Field(..., description="Whether the current attempt solved the task")
-    attempts_used: int = Field(..., ge=0, description="Number of attempts consumed in the episode")
-
-    @field_validator("value", "partial_credit", mode="before")
+    @field_validator("value", mode="before")
     @classmethod
-    def clamp_unit_interval(cls, value: float) -> float:
-        return max(0.0, min(1.0, float(value)))
+    def clamp(cls, v: float) -> float:
+        return max(0.0, min(1.0, float(v)))
 
 
-class CodeReviewState(BaseModel):
-    """Typed state snapshot returned by state()."""
-
+class DataCleaningState(BaseModel):
     episode_id: str
     step_count: int = Field(..., ge=0)
     task_id: str
@@ -221,23 +218,19 @@ class CodeReviewState(BaseModel):
 
     @field_validator("final_score", mode="before")
     @classmethod
-    def clamp_final_score(cls, value: float) -> float:
-        return max(0.0, min(1.0, float(value)))
+    def clamp_score(cls, v: float) -> float:
+        return max(0.0, min(1.0, float(v)))
 
 
-Action = CodeReviewAction
-Observation = CodeReviewObservation
-Reward = CodeReviewReward
-State = CodeReviewState
+Action = DataCleaningAction
+Observation = DataCleaningObservation
+Reward = DataCleaningReward
+State = DataCleaningState
 
 
 class ResetRequest(BaseModel):
     task_id: str | None = None
     seed: int | None = None
-
-
-class StepRequest(BaseModel):
-    action: Action
 
 
 class GraderRequest(BaseModel):

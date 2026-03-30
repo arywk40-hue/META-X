@@ -1,19 +1,20 @@
 ---
-title: Code Review Env
-emoji: 🔍
+title: Data Cleaning Env
+emoji: 🧹
 colorFrom: blue
 colorTo: green
 sdk: docker
 pinned: false
+app_port: 7860
 tags:
   - openenv
   - rl-environment
-  - code-review
+  - data-cleaning
 ---
 
-# OpenEnv RL Environment Template
+# OpenEnv Data Cleaning Environment
 
-This repository is a production-ready starter for the Meta PyTorch OpenEnv Hackathon. It ships with a full FastAPI environment, deterministic tasks and graders, dense reward shaping, a baseline agent runner, and a test suite that can be swapped to the final domain on problem day.
+This repository is a production-ready OpenEnv environment for real-world tabular data cleaning. It exposes a FastAPI-compatible API, deterministic graders, dense reward shaping, and a root `inference.py` runner that uses an OpenAI-compatible client for live evaluation.
 
 ## Quick Start
 
@@ -24,7 +25,7 @@ pip install -r requirements.txt
 uvicorn app:app --reload
 ```
 
-The API will be available at `http://127.0.0.1:8000` locally and `7860` in HuggingFace Spaces.
+The API will be available at `http://127.0.0.1:8000` locally and `7860` in Hugging Face Spaces.
 
 ## Transport
 
@@ -36,11 +37,11 @@ The template supports both:
 WebSocket messages use a simple envelope:
 
 ```json
-{"type":"reset","payload":{"task_id":"easy_01"}}
-{"type":"step","payload":{"action_type":"classify_a"}}
+{"type":"reset","payload":{"task_id":"null_filling"}}
+{"type":"step","payload":{"action_type":"fill_missing","row_index":1,"column":"age","new_value":"unknown","reason":"age is missing"}}
 {"type":"state"}
 {"type":"tasks"}
-{"type":"grader","payload":{"task_id":"easy_01","episode":[...]}}
+{"type":"grader","payload":{"task_id":"null_filling","episode":[...]}}
 ```
 
 Each WebSocket connection gets its own isolated `OpenEnv` instance and is cleaned up automatically when the connection closes.
@@ -68,17 +69,15 @@ HOST=0.0.0.0 PORT=7860 WORKERS=2 MAX_CONCURRENT_ENVS=128 uvicorn app:app --host 
 - `scripts/validate.py`: smoke validation for metadata, graders, and endpoints.
 - `tests/`: unit and integration coverage for the template.
 
-## Swap Strategy
+## Benchmark
 
-The default domain is classification so the template is immediately runnable. When the hackathon problem drops, the primary swap surface is:
+The environment now ships with five data-cleaning tasks across three difficulty tiers:
 
-- `environment/tasks.py`
-- `environment/graders.py`
-- `environment/reward.py`
-- `environment/models.py` if the observation/action payloads need new fields
+- Easy: null repair
+- Medium: date and currency standardization, duplicate and outlier cleanup
+- Hard: multi-layer pipeline repair, adversarial sensor validation
 
-For the exact launch-day sequence, see [PROBLEM_DAY_PLAYBOOK.md](/Users/ariyanbhakat/Desktop/metax/PROBLEM_DAY_PLAYBOOK.md).
-For judging-weighted decision-making, use [PROBLEM_DAY_SCORECARD.md](/Users/ariyanbhakat/Desktop/metax/PROBLEM_DAY_SCORECARD.md).
+Only public task metadata is exposed via `/tasks`. The graders score action histories deterministically and reward partial progress.
 
 ## Inference
 

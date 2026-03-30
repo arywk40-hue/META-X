@@ -1,4 +1,4 @@
-"""Pre-submission validation for the code review environment."""
+"""Pre-submission validation for the data-cleaning environment."""
 
 from __future__ import annotations
 
@@ -26,9 +26,9 @@ def validate_manifest() -> None:
     manifest_path = ROOT / "openenv.yaml"
     _check(manifest_path.exists(), "openenv.yaml exists")
     manifest_text = manifest_path.read_text()
-    _check("name: openenv-template" in manifest_text, "manifest name is correct")
+    _check("name: data-cleaning-env" in manifest_text, "manifest name is correct")
     _check("tags:" in manifest_text and "openenv" in manifest_text, "manifest includes openenv tag")
-    _check("tasks:" in manifest_text and manifest_text.count("- id:") >= 3, "manifest lists tasks")
+    _check("tasks:" in manifest_text and manifest_text.count("- id:") >= 5, "manifest lists the data-cleaning benchmark")
 
 
 def validate_inference_script() -> None:
@@ -56,22 +56,26 @@ def validate_graders() -> None:
         _check(0.0 <= score <= 1.0, f"{task_id} grader returns a valid score on empty history")
 
     score_levels = {
-        grade_episode("security_vulnerability", []),
+        grade_episode("duplicate_outlier", []),
         grade_episode(
-            "security_vulnerability",
-            [{"action": {"bug_line": 1, "bug_type": "syntax", "explanation": "wrong"}}],
+            "duplicate_outlier",
+            [{"action": {"action_type": "drop_row", "row_index": 1, "column": "row_id", "new_value": None, "reason": "duplicate"}}],
         ),
         grade_episode(
-            "security_vulnerability",
-            [{"action": {"bug_line": 23, "bug_type": "logic", "explanation": "wrong"}}],
+            "duplicate_outlier",
+            [
+                {"action": {"action_type": "drop_row", "row_index": 1, "column": "row_id", "new_value": None, "reason": "duplicate"}},
+                {"action": {"action_type": "flag_anomaly", "row_index": 2, "column": "amount", "new_value": None, "reason": "outlier"}},
+            ],
         ),
         grade_episode(
-            "security_vulnerability",
-            [{"action": {"bug_line": 23, "bug_type": "security", "explanation": "This endpoint is unsafe and should be reviewed carefully."}}],
-        ),
-        grade_episode(
-            "security_vulnerability",
-            [{"action": {"bug_line": 23, "bug_type": "security", "explanation": "This is SQL injection from an f-string query instead of a parameterized query."}}],
+            "duplicate_outlier",
+            [
+                {"action": {"action_type": "drop_row", "row_index": 1, "column": "row_id", "new_value": None, "reason": "duplicate"}},
+                {"action": {"action_type": "flag_anomaly", "row_index": 2, "column": "amount", "new_value": None, "reason": "outlier"}},
+                {"action": {"action_type": "fix_value", "row_index": 3, "column": "amount", "new_value": 50.0, "reason": "negative amount"}},
+                {"action": {"action_type": "standardize_format", "row_index": 5, "column": "status", "new_value": "completed", "reason": "normalize case"}},
+            ],
         ),
     }
     _check(len(score_levels) >= 4, "grader exposes multiple distinct score levels")
@@ -86,6 +90,7 @@ def validate_api() -> None:
     tasks = client.get("/tasks")
     _check(tasks.status_code == 200, "GET /tasks succeeds")
     _check(isinstance(tasks.json(), list), "GET /tasks returns a bare array")
+    _check(len(tasks.json()) >= 5, "GET /tasks exposes the data-cleaning benchmark")
     _check(all("answer" not in task for task in tasks.json()), "GET /tasks does not leak answers")
 
     reset = client.post("/reset")
@@ -95,12 +100,14 @@ def validate_api() -> None:
     step = client.post(
         f"/step?session_id={session_id}",
         json={
-            "bug_line": 1,
-            "bug_type": "syntax",
-            "explanation": "This is probably wrong.",
+            "action_type": "flag_anomaly",
+            "row_index": 0,
+            "column": "reading",
+            "new_value": None,
+            "reason": "This looks suspicious.",
         },
     )
-    _check(step.status_code == 200, "POST /step succeeds with raw CodeReviewAction JSON")
+    _check(step.status_code == 200, "POST /step succeeds with raw data-cleaning action JSON")
 
     state = client.get(f"/state?session_id={session_id}")
     _check(state.status_code == 200, "GET /state succeeds")
@@ -118,7 +125,7 @@ def validate_api() -> None:
         tasks_message = websocket.receive_json()
         _check(tasks_message["type"] == "tasks", "WS /ws tasks message succeeds")
 
-        websocket.send_json({"type": "reset", "payload": {"task_id": "runtime_bug"}})
+        websocket.send_json({"type": "reset", "payload": {"task_id": "null_filling"}})
         reset_message = websocket.receive_json()
         _check(reset_message["type"] == "reset", "WS /ws reset succeeds")
 
@@ -126,9 +133,11 @@ def validate_api() -> None:
             {
                 "type": "step",
                 "payload": {
-                    "bug_line": 6,
-                    "bug_type": "runtime",
-                    "explanation": "The code divides by zero on an empty list.",
+                    "action_type": "fill_missing",
+                    "row_index": 1,
+                    "column": "age",
+                    "new_value": "unknown",
+                    "reason": "age is missing",
                 },
             }
         )
@@ -138,7 +147,7 @@ def validate_api() -> None:
 
 def validate_baseline() -> None:
     agent = BaselineAgent(env=OpenEnv(), use_llm=False)
-    results = agent.run(task_ids=["runtime_bug"], max_episodes_per_task=1)
+    results = agent.run(task_ids=["null_filling"], max_episodes_per_task=1)
     _check(results["summary"]["total_episodes"] == 1, "baseline smoke test completes")
 
 

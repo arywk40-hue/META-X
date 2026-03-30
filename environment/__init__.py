@@ -4,10 +4,10 @@ from .env import OpenEnv, OpenEnvBase
 from .graders import GRADERS, get_grader, grade_episode
 from .models import (
     Action,
-    CodeReviewAction,
-    CodeReviewObservation,
-    CodeReviewReward,
-    CodeReviewState,
+    DataCleaningAction,
+    DataCleaningObservation,
+    DataCleaningReward,
+    DataCleaningState,
     Difficulty,
     Observation,
     Reward,
@@ -19,10 +19,10 @@ from .tasks import TASKS, get_default_task, get_task, get_tasks_by_difficulty
 
 __all__ = [
     "Action",
-    "CodeReviewAction",
-    "CodeReviewObservation",
-    "CodeReviewReward",
-    "CodeReviewState",
+    "DataCleaningAction",
+    "DataCleaningObservation",
+    "DataCleaningReward",
+    "DataCleaningState",
     "Difficulty",
     "GRADERS",
     "Observation",

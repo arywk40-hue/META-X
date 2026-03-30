@@ -1,4 +1,4 @@
-"""Core OpenEnv implementation for the code review domain."""
+"""Core OpenEnv implementation for the data-cleaning domain."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import threading
 from typing import Any
 from uuid import uuid4
 
-from .graders import grade_episode, score_bug_report
+from .graders import grade_episode
 from .models import Action, Observation, Reward, State, Task
 from .reward import compute_reward
 from .tasks import TASKS, get_task
@@ -21,8 +21,6 @@ def utc_now() -> datetime:
 
 
 class OpenEnvBase(ABC):
-    """Abstract base class for OpenEnv-compatible environments."""
-
     @abstractmethod
     def reset(self, task_id: str | None = None, seed: int | None = None) -> Observation:
         raise NotImplementedError
@@ -37,7 +35,7 @@ class OpenEnvBase(ABC):
 
 
 class OpenEnv(OpenEnvBase):
-    """Stateful environment for iterative Python code review."""
+    """Stateful data-cleaning environment."""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -65,12 +63,19 @@ class OpenEnv(OpenEnvBase):
             self.done = False
             self.cumulative_reward = 0.0
             self.episode_history = []
+
+            issues = task.config.get("issues", [])
+            traps = task.config.get("traps", [])
             self.task_state = {
                 "attempts_remaining": task.max_steps,
                 "feedback_history": [],
                 "feedback": "",
                 "solved": False,
                 "final_score": 0.0,
+                "fixed_issues": set(),
+                "penalized_traps": set(),
+                "total_issues": len(issues),
+                "traps": set(traps),
             }
             self.current_observation = self._build_observation()
             return self.current_observation
@@ -83,7 +88,7 @@ class OpenEnv(OpenEnvBase):
                 raise RuntimeError("Episode has ended. Call reset() to start a new episode.")
 
             state_before = self._reward_state()
-            observation_before = self.current_observation or self._build_observation()
+            obs_before = self.current_observation or self._build_observation()
             transition = self._evaluate_action(action)
 
             self.step_count += 1
@@ -95,13 +100,18 @@ class OpenEnv(OpenEnvBase):
             self.done = transition["solved"] or self.task_state["attempts_remaining"] == 0
 
             state_after = self._reward_state(transition=transition)
-            reward = compute_reward(state_before, action, state_after, task_config=self.current_task.config)
+            reward = compute_reward(
+                state_before,
+                action,
+                state_after,
+                task_config={**self.current_task.config, "total_issues": self.task_state["total_issues"]},
+            )
             self.cumulative_reward += reward.value
 
             info = self._build_info(transition)
             history_entry = {
                 "step": self.step_count,
-                "observation": observation_before.model_dump(mode="json"),
+                "observation": obs_before.model_dump(mode="json"),
                 "action": action.model_dump(mode="json"),
                 "reward": reward.value,
                 "reward_detail": reward.model_dump(mode="json"),
@@ -130,7 +140,6 @@ class OpenEnv(OpenEnvBase):
                 solved=bool(self.task_state.get("solved", False)),
                 final_score=float(self.task_state.get("final_score", 0.0)),
             )
-
             payload = state.model_dump(mode="json")
             payload.update(
                 {
@@ -139,6 +148,7 @@ class OpenEnv(OpenEnvBase):
                     "done": self.done,
                     "attempts_remaining": self.task_state.get("attempts_remaining", 0),
                     "cumulative_reward": round(self.cumulative_reward, 4),
+                    "issues_remaining": self._issues_remaining(),
                     "current_observation": self.current_observation.model_dump(mode="json"),
                     "episode_history": copy.deepcopy(self.episode_history),
                     "metadata": {
@@ -151,64 +161,100 @@ class OpenEnv(OpenEnvBase):
             return payload
 
     def _choose_task(self, seed: int | None) -> Task:
-        chooser = random.Random(seed)
-        return chooser.choice(list(TASKS.values()))
+        return random.Random(seed).choice(list(TASKS.values()))
+
+    def _issues_remaining(self) -> int:
+        total = self.task_state.get("total_issues", 0)
+        fixed = len(self.task_state.get("fixed_issues", set()))
+        return max(0, total - fixed)
 
     def _evaluate_action(self, action: Action) -> dict[str, Any]:
-        answer = self.current_task.config["answer"]
-        step_number = self.step_count + 1
-        reward_value, partial_credit, breakdown = score_bug_report(
-            action.model_dump(mode="json"),
-            answer,
-            step_number,
-        )
-        solved = reward_value >= 0.85
+        issues: list[dict[str, Any]] = self.current_task.config.get("issues", [])
+        traps: set[int] = self.task_state["traps"]
+        fixed: set[tuple[int, str]] = self.task_state["fixed_issues"]
 
-        if solved:
-            feedback = "Correct! You identified the bug."
-        elif action.bug_line == answer["bug_line"]:
-            feedback = "Right line, wrong type. Think about what category of error this is."
-        elif action.bug_type == answer["bug_type"]:
-            feedback = "Right bug type, wrong line. Look more carefully at the control flow."
+        row = action.row_index
+        col = action.column
+        atype = action.action_type
+
+        trap_penalty = row in traps and col == "reading"
+        issues_fixed_this_step = 0
+        redundant = False
+        matched_issue: dict[str, Any] | None = None
+
+        for issue in issues:
+            key = (issue["row_index"], issue["column"])
+            if issue["row_index"] == row and issue["column"] == col:
+                if key in fixed:
+                    redundant = True
+                else:
+                    appropriate_types = {
+                        "missing": {"fill_missing", "fix_value"},
+                        "string_null": {"fill_missing", "fix_value"},
+                        "format": {"standardize_format", "fix_value"},
+                        "case": {"standardize_format", "fix_value"},
+                        "duplicate": {"drop_row"},
+                        "outlier": {"flag_anomaly", "fix_value", "drop_row"},
+                        "negative": {"fix_value"},
+                        "invalid_fk": {"flag_anomaly", "fix_value", "drop_row"},
+                        "zero_price": {"fix_value"},
+                        "invalid_date": {"fix_value", "flag_anomaly"},
+                        "null": {"fill_missing", "fix_value", "flag_anomaly"},
+                    }.get(issue["issue_type"], {"fix_value", "flag_anomaly"})
+
+                    if atype in appropriate_types:
+                        fixed.add(key)
+                        issues_fixed_this_step += 1
+                        matched_issue = issue
+                        break
+
+        if trap_penalty:
+            self.task_state["penalized_traps"].add(row)
+
+        total = self.task_state["total_issues"]
+        solved = len(fixed) >= total
+
+        if trap_penalty:
+            feedback = f"Row {row} contains a valid reading that should not be modified."
+        elif redundant:
+            feedback = f"Row {row}, column '{col}' was already fixed. No change made."
+        elif issues_fixed_this_step > 0 and matched_issue is not None:
+            feedback = f"Correct — row {row}, column '{col}' issue resolved ({matched_issue['issue_type']})."
         else:
-            feedback = "Not quite. Re-read the function logic carefully."
+            feedback = f"Row {row}, column '{col}' does not match a known issue. Check the dataset again."
 
         return {
-            "reward_value": reward_value,
-            "partial_credit": partial_credit,
-            "feedback": feedback,
+            "issues_fixed_this_step": issues_fixed_this_step,
+            "issues_remaining": self._issues_remaining(),
+            "trap_penalty": trap_penalty,
+            "redundant_action": redundant,
             "solved": solved,
-            "breakdown": breakdown,
+            "feedback": feedback,
         }
 
     def _build_observation(self) -> Observation:
         task = self.current_task
         if task is None:
-            raise RuntimeError("Environment has not been reset.")
+            raise RuntimeError("Environment not reset.")
 
         attempts_remaining = int(self.task_state.get("attempts_remaining", task.max_steps))
-        feedback = str(self.task_state.get("feedback", ""))
-        feedback_history = list(self.task_state.get("feedback_history", []))
-
-        if self.done:
-            context = f"Episode complete. Final score: {self.task_state.get('final_score', 0.0):.2f}."
-        else:
-            context = (
-                "Review the Python code, identify the single most important bug, "
-                "and cite the exact line, bug type, and explanation."
-            )
-
+        context = (
+            "Episode complete."
+            if self.done
+            else "Review the dataset, identify the next issue, and submit one action."
+        )
         return Observation(
             done=self.done,
-            code_snippet=task.config["code_snippet"],
             task_id=task.id,
-            attempts_remaining=attempts_remaining,
-            feedback=feedback,
-            feedback_history=feedback_history,
             task_name=task.name,
             task_description=task.description.strip(),
+            dataset_preview=task.config["dataset_preview"],
+            issues_remaining=self._issues_remaining(),
             step=self.step_count,
             max_steps=task.max_steps,
+            attempts_remaining=attempts_remaining,
+            feedback=str(self.task_state.get("feedback", "")),
+            feedback_history=list(self.task_state.get("feedback_history", [])),
             available_actions=list(task.config.get("available_actions", [])) if not self.done else [],
             context=context,
         )
@@ -228,6 +274,7 @@ class OpenEnv(OpenEnvBase):
             "episode_progress": round(self.step_count / max(1, self.current_task.max_steps), 3),
             "solved": transition["solved"],
             "feedback": transition["feedback"],
-            "partial_credit": transition["partial_credit"],
-            "score_breakdown": transition["breakdown"],
+            "issues_fixed_this_step": transition["issues_fixed_this_step"],
+            "issues_remaining": transition["issues_remaining"],
+            "trap_penalty": transition.get("trap_penalty", False),
         }
