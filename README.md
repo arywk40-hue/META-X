@@ -16,6 +16,8 @@ tags:
 
 This repository is a production-ready OpenEnv environment for real-world tabular data cleaning. It exposes a FastAPI-compatible API, deterministic graders, dense reward shaping, and a root `inference.py` runner that uses an OpenAI-compatible client for live evaluation.
 
+It also now includes a generic dataset-preparation workflow for arbitrary CSV files. You can feed in a dataset, optionally specify a target column, and get back train-ready CSV artifacts plus a feature manifest.
+
 ## Quick Start
 
 ```bash
@@ -102,3 +104,75 @@ python -m baseline.inference
 ```
 
 The internal baseline keeps a heuristic fallback for smoke tests and CI. The root `inference.py` is the submission-oriented script.
+
+## Generic CSV Preparation
+
+Prepare any CSV into train-ready artifacts:
+
+```bash
+python prepare_dataset.py \
+  --csv data/kaggle/Titanic-Dataset.csv \
+  --target Survived \
+  --output-dir outputs/titanic
+```
+
+This writes:
+
+- `*_prepared_full.csv`
+- `*_prepared_train.csv`
+- `*_prepared_valid.csv`
+- `*_feature_manifest.json`
+
+There is also an HTTP endpoint:
+
+```bash
+curl -X POST http://127.0.0.1:8000/prepare-dataset \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "csv_path": "data/kaggle/Titanic-Dataset.csv",
+    "target_column": "Survived",
+    "output_dir": "outputs/titanic"
+  }'
+```
+
+## Prepare and Evaluate
+
+To prepare a dataset and immediately score it with fast baseline models:
+
+```bash
+python prepare_and_evaluate.py \
+  --csv data/kaggle/Titanic-Dataset.csv \
+  --target Survived \
+  --output-dir outputs/titanic_eval
+```
+
+This writes the prepared CSVs plus an evaluation report that ranks candidate models on the validation split.
+
+API version:
+
+```bash
+curl -X POST http://127.0.0.1:8000/prepare-and-evaluate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "csv_path": "data/kaggle/Titanic-Dataset.csv",
+    "target_column": "Survived",
+    "output_dir": "outputs/titanic_eval"
+  }'
+```
+
+## Streamlit UI
+
+Launch the CSV upload UI:
+
+```bash
+streamlit run streamlit_app.py
+```
+
+The UI supports:
+
+- CSV upload
+- dataset preview and missing-value profile
+- target-column selection
+- prepare-only mode
+- prepare-and-evaluate mode
+- direct download of train, validation, manifest, and evaluation report artifacts

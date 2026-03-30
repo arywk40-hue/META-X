@@ -1,0 +1,66 @@
+{
+  "dataset_name": "titanic_dataset",
+  "source_path": "/Users/ariyanbhakat/Desktop/metax/data/kaggle/Titanic-Dataset.csv",
+  "output_dir": "/Users/ariyanbhakat/Desktop/metax/outputs/titanic",
+  "target_column": "Survived",
+  "task_type": "classification",
+  "original_shape": {
+    "rows": 891,
+    "columns": 12
+  },
+  "prepared_shape": {
+    "rows": 891,
+    "columns": 17
+  },
+  "feature_count": 16,
+  "feature_columns": [
+    "Pclass",
+    "Age",
+    "SibSp",
+    "Parch",
+    "Fare",
+    "name__len",
+    "age__was_missing",
+    "cabin__was_missing",
+    "embarked__was_missing",
+    "sex_female",
+    "sex_male",
+    "ticket__freq",
+    "cabin__freq",
+    "embarked_C",
+    "embarked_Q",
+    "embarked_S"
+  ],
+  "dropped_identifier_columns": [
+    "PassengerId",
+    "Name"
+  ],
+  "encoded_columns": [
+    "Sex",
+    "Ticket",
+    "Cabin",
+    "Embarked"
+  ],
+  "encoding_map": {
+    "Sex": "one_hot",
+    "Ticket": "frequency",
+    "Cabin": "frequency",
+    "Embarked": "one_hot"
+  },
+  "steps": [
+    "Added text-length features: name__len.",
+    "Added missingness indicators for 3 columns.",
+    "Dropped identifier-like columns: PassengerId, Name.",
+    "Clipped extreme numeric outliers in 5 columns.",
+    "One-hot encoded column 'Sex' into 2 features.",
+    "Imputed numeric column 'Age' with median 28.0000.",
+    "Frequency encoded high-cardinality column 'Ticket'.",
+    "Filled high-cardinality column 'Cabin' with 'Unknown'.",
+    "Frequency encoded high-cardinality column 'Cabin'.",
+    "Filled categorical column 'Embarked' with 'S'.",
+    "One-hot encoded column 'Embarked' into 3 features.",
+    "Split prepared dataset into train (713 rows) and valid (178 rows)."
+  ],
+  "ready_for_training": true,
+  "recommended_model_family": "tree_based_boosting_or_linear_baseline"
+}

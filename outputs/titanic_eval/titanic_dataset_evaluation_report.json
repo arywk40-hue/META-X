@@ -1,0 +1,42 @@
+{
+  "dataset_name": "titanic_dataset",
+  "task_type": "classification",
+  "target_column": "Survived",
+  "primary_metric_name": "roc_auc",
+  "best_model": "random_forest",
+  "best_primary_metric": 0.897326,
+  "leaderboard": [
+    {
+      "model_name": "random_forest",
+      "training_seconds": 0.8635,
+      "accuracy": 0.814607,
+      "f1_macro": 0.806235,
+      "log_loss": 0.406888,
+      "roc_auc": 0.897326,
+      "primary_metric": 0.897326,
+      "primary_metric_name": "roc_auc"
+    },
+    {
+      "model_name": "logistic_regression",
+      "training_seconds": 0.0619,
+      "accuracy": 0.825843,
+      "f1_macro": 0.819644,
+      "log_loss": 0.398446,
+      "roc_auc": 0.889237,
+      "primary_metric": 0.889237,
+      "primary_metric_name": "roc_auc"
+    },
+    {
+      "model_name": "hist_gradient_boosting",
+      "training_seconds": 0.2033,
+      "accuracy": 0.825843,
+      "f1_macro": 0.817978,
+      "log_loss": 0.479589,
+      "roc_auc": 0.881018,
+      "primary_metric": 0.881018,
+      "primary_metric_name": "roc_auc"
+    }
+  ],
+  "prepared_train_path": "/Users/ariyanbhakat/Desktop/metax/outputs/titanic_eval/titanic_dataset_prepared_train.csv",
+  "prepared_valid_path": "/Users/ariyanbhakat/Desktop/metax/outputs/titanic_eval/titanic_dataset_prepared_valid.csv"
+}

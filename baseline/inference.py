@@ -42,7 +42,7 @@ class BaselineAgent:
         self.env = env or OpenEnv()
         self.model = model
         hf_token = os.getenv("HF_TOKEN")
-        api_key = os.getenv("OPENAI_API_KEY", hf_token or "")
+        api_key = os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY") or (hf_token or "")
         base_url = os.getenv("API_BASE_URL")
         self.use_llm = bool(use_llm) if use_llm is not None else bool(api_key and OpenAI)
         self.client = OpenAI(api_key=api_key, base_url=base_url) if self.use_llm and OpenAI else None
@@ -141,11 +141,19 @@ class BaselineAgent:
             )
             output_text = getattr(response, "output_text", "") or ""
         else:  # pragma: no cover - compatibility path
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=200,
-            )
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=200,
+                    response_format={"type": "json_object"},
+                )
+            except Exception:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=200,
+                )
             output_text = response.choices[0].message.content or ""
 
         return Action.from_llm_output(output_text, observation.available_actions)
@@ -184,6 +192,13 @@ class BaselineAgent:
                 {"action_type": "fix_value", "row_index": 3, "column": "order_dt", "new_value": "2024-01-01", "reason": "repair invalid month in date"},
                 {"action_type": "flag_anomaly", "row_index": 4, "column": "qty", "new_value": None, "reason": "quantity is a statistical outlier"},
                 {"action_type": "drop_row", "row_index": 5, "column": "row_id", "new_value": None, "reason": "exact duplicate of row 0"},
+            ]
+        elif task_id == "titanic_manifest":
+            actions = [
+                {"action_type": "fill_missing", "row_index": 0, "column": "Age", "new_value": 28, "reason": "impute a plausible age for the missing value"},
+                {"action_type": "fill_missing", "row_index": 1, "column": "Embarked", "new_value": "C", "reason": "fill a valid embarkation code"},
+                {"action_type": "fill_missing", "row_index": 2, "column": "Embarked", "new_value": "C", "reason": "fill a valid embarkation code"},
+                {"action_type": "fill_missing", "row_index": 3, "column": "Cabin", "new_value": "Unknown", "reason": "use a consistent placeholder for missing cabin"},
             ]
         else:
             actions = [

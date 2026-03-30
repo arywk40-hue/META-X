@@ -176,15 +176,17 @@ class OpenEnv(OpenEnvBase):
         row = action.row_index
         col = action.column
         atype = action.action_type
+        normalized_col = str(col).strip().lower()
 
-        trap_penalty = row in traps and col == "reading"
+        trap_penalty = row in traps and normalized_col == "reading"
         issues_fixed_this_step = 0
         redundant = False
         matched_issue: dict[str, Any] | None = None
 
         for issue in issues:
-            key = (issue["row_index"], issue["column"])
-            if issue["row_index"] == row and issue["column"] == col:
+            issue_col = str(issue["column"]).strip()
+            key = (issue["row_index"], issue_col)
+            if issue["row_index"] == row and issue_col.lower() == normalized_col:
                 if key in fixed:
                     redundant = True
                 else:
@@ -202,7 +204,7 @@ class OpenEnv(OpenEnvBase):
                         "null": {"fill_missing", "fix_value", "flag_anomaly"},
                     }.get(issue["issue_type"], {"fix_value", "flag_anomaly"})
 
-                    if atype in appropriate_types:
+                    if atype in appropriate_types and self._value_matches_issue(issue, action.new_value):
                         fixed.add(key)
                         issues_fixed_this_step += 1
                         matched_issue = issue
@@ -219,7 +221,7 @@ class OpenEnv(OpenEnvBase):
         elif redundant:
             feedback = f"Row {row}, column '{col}' was already fixed. No change made."
         elif issues_fixed_this_step > 0 and matched_issue is not None:
-            feedback = f"Correct — row {row}, column '{col}' issue resolved ({matched_issue['issue_type']})."
+            feedback = f"Correct — row {row}, column '{matched_issue['column']}' issue resolved ({matched_issue['issue_type']})."
         else:
             feedback = f"Row {row}, column '{col}' does not match a known issue. Check the dataset again."
 
@@ -231,6 +233,24 @@ class OpenEnv(OpenEnvBase):
             "solved": solved,
             "feedback": feedback,
         }
+
+    def _value_matches_issue(self, issue: dict[str, Any], new_value: Any) -> bool:
+        if "allowed_values" in issue:
+            return str(new_value).strip() in {str(value).strip() for value in issue["allowed_values"]}
+
+        if issue.get("value_type") == "numeric_range":
+            try:
+                numeric_value = float(new_value)
+            except (TypeError, ValueError):
+                return False
+            minimum = float(issue.get("min", numeric_value))
+            maximum = float(issue.get("max", numeric_value))
+            return minimum <= numeric_value <= maximum
+
+        if issue.get("correct") is not None:
+            return str(new_value).strip() == str(issue["correct"]).strip()
+
+        return True
 
     def _build_observation(self) -> Observation:
         task = self.current_task

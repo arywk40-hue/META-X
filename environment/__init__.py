@@ -1,9 +1,13 @@
 """OpenEnv environment package exports."""
 
 from .env import OpenEnv, OpenEnvBase
+from .evaluation import DatasetEvaluationArtifacts, evaluate_prepared_dataset, prepare_and_evaluate_dataset
 from .graders import GRADERS, get_grader, grade_episode
+from .data_prep import DatasetPreparationArtifacts, prepare_dataset
 from .models import (
     Action,
+    DatasetEvaluationRequest,
+    DatasetPreparationRequest,
     DataCleaningAction,
     DataCleaningObservation,
     DataCleaningReward,
@@ -19,6 +23,10 @@ from .tasks import TASKS, get_default_task, get_task, get_tasks_by_difficulty
 
 __all__ = [
     "Action",
+    "DatasetEvaluationArtifacts",
+    "DatasetEvaluationRequest",
+    "DatasetPreparationArtifacts",
+    "DatasetPreparationRequest",
     "DataCleaningAction",
     "DataCleaningObservation",
     "DataCleaningReward",
@@ -38,4 +46,7 @@ __all__ = [
     "get_task",
     "get_tasks_by_difficulty",
     "grade_episode",
+    "evaluate_prepared_dataset",
+    "prepare_dataset",
+    "prepare_and_evaluate_dataset",
 ]

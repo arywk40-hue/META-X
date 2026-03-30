@@ -103,6 +103,12 @@ class DataCleaningAction(BaseModel):
     @field_validator("action_type")
     @classmethod
     def validate_action_type(cls, v: str) -> str:
+        aliases = {
+            "fill_value": "fix_value",
+            "replace_value": "fix_value",
+            "mark_anomaly": "flag_anomaly",
+            "standardize": "standardize_format",
+        }
         valid = {
             "fix_value",
             "drop_row",
@@ -112,9 +118,17 @@ class DataCleaningAction(BaseModel):
             "flag_anomaly",
             "standardize_format",
         }
-        cleaned = v.strip().lower()
+        cleaned = aliases.get(v.strip().lower(), v.strip().lower())
         if cleaned not in valid:
             raise ValueError(f"action_type must be one of {sorted(valid)}")
+        return cleaned
+
+    @field_validator("column")
+    @classmethod
+    def validate_column(cls, v: str) -> str:
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("column cannot be empty")
         return cleaned
 
     @field_validator("reason")
@@ -243,3 +257,19 @@ class BaselineRequest(BaseModel):
     model: str = "gpt-4o-mini"
     max_episodes_per_task: int = Field(default=1, ge=1, le=10)
     verbose: bool = False
+
+
+class DatasetPreparationRequest(BaseModel):
+    csv_path: str
+    target_column: str | None = None
+    output_dir: str | None = None
+    validation_fraction: float = Field(default=0.2, gt=0.0, lt=0.5)
+    random_seed: int = Field(default=42)
+
+
+class DatasetEvaluationRequest(BaseModel):
+    csv_path: str
+    target_column: str
+    output_dir: str | None = None
+    validation_fraction: float = Field(default=0.2, gt=0.0, lt=0.5)
+    random_seed: int = Field(default=42)

@@ -146,12 +146,47 @@ def _grade_adversarial(episode_history: list[dict[str, Any]]) -> float:
     return round(max(0.0, min(1.0, score)), 4)
 
 
+def _grade_titanic_manifest(episode_history: list[dict[str, Any]]) -> float:
+    """4 issues, 0.25 each, using flexible but typed validation."""
+    actions = _actions_from_history(episode_history)
+    fixed = set()
+
+    for action in actions:
+        row = action.get("row_index")
+        col = str(action.get("column", "")).strip().lower()
+        atype = action.get("action_type", "")
+        value = action.get("new_value")
+
+        if atype not in ("fill_missing", "fix_value"):
+            continue
+
+        if row == 0 and col == "age":
+            try:
+                age = float(value)
+            except (TypeError, ValueError):
+                age = -1
+            if 0 <= age <= 80:
+                fixed.add("age")
+
+        if row == 1 and col == "embarked" and str(value).strip() in {"C", "Q", "S"}:
+            fixed.add("embarked_1")
+
+        if row == 2 and col == "embarked" and str(value).strip() in {"C", "Q", "S"}:
+            fixed.add("embarked_2")
+
+        if row == 3 and col == "cabin" and str(value).strip().lower() in {"unknown", "missing"}:
+            fixed.add("cabin")
+
+    return round(len(fixed) / 4, 4)
+
+
 GRADERS: dict[str, GraderFunction] = {
     "null_filling": _grade_null_filling,
     "format_standardization": _grade_format_standardization,
     "duplicate_outlier": _grade_duplicate_outlier,
     "multi_layer_pipeline": _grade_multi_layer,
     "adversarial_sensor": _grade_adversarial,
+    "titanic_manifest": _grade_titanic_manifest,
 }
 
 

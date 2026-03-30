@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import csv
+from pathlib import Path
+
 from .models import Difficulty, Task
 
 
@@ -57,6 +60,63 @@ row_id | sensor_id | reading   | unit | recorded_at
 4      | S005      | 0.0       | C    | 2024-01-15 08:04
 5      | S006      | 999       | C    | 2024-01-15 08:05
 """
+
+TITANIC_FALLBACK_DATASET = """\
+row_id | PassengerId | Name                                         | Sex    | Age  | Fare    | Cabin | Embarked | Ticket   | Pclass
+-------|-------------|----------------------------------------------|--------|------|---------|-------|----------|----------|-------
+0      | 6           | Moran, Mr. James                             | male   | NULL | 8.4583  | NULL  | Q        | 330877   | 3
+1      | 62          | Icard, Miss. Amelie                          | female | 38.0 | 80.0000 | B28   | NULL     | 113572   | 1
+2      | 830         | Stone, Mrs. George Nelson (Martha Evelyn)    | female | 62.0 | 80.0000 | B28   | NULL     | 113572   | 1
+3      | 1           | Braund, Mr. Owen Harris                      | male   | 22.0 | 7.2500  | NULL  | S        | A/5 21171| 3
+4      | 2           | Cumings, Mrs. John Bradley (Florence Briggs) | female | 38.0 | 71.2833 | C85   | C        | PC 17599 | 1
+"""
+
+
+def _normalize_cell(value: str | None) -> str:
+    if value is None:
+        return "NULL"
+    cleaned = str(value).strip()
+    return cleaned if cleaned else "NULL"
+
+
+def _titanic_task_preview() -> str:
+    dataset_path = Path("data/kaggle/Titanic-Dataset.csv")
+    if not dataset_path.exists():
+        return TITANIC_FALLBACK_DATASET
+
+    target_ids = [6, 62, 830, 1, 2]
+    selected_rows: list[dict[str, str]] = []
+    with dataset_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            passenger_id = int(row["PassengerId"])
+            if passenger_id in target_ids:
+                selected_rows.append(row)
+            if len(selected_rows) == len(target_ids):
+                break
+
+    if len(selected_rows) != len(target_ids):
+        return TITANIC_FALLBACK_DATASET
+
+    ordered_rows = sorted(selected_rows, key=lambda row: target_ids.index(int(row["PassengerId"])))
+    lines = [
+        "row_id | PassengerId | Name                                         | Sex    | Age  | Fare    | Cabin | Embarked | Ticket    | Pclass",
+        "-------|-------------|----------------------------------------------|--------|------|---------|-------|----------|-----------|-------",
+    ]
+    for row_index, row in enumerate(ordered_rows):
+        lines.append(
+            f"{row_index:<6} | "
+            f"{row['PassengerId']:<11} | "
+            f"{row['Name'][:44]:<44} | "
+            f"{row['Sex']:<6} | "
+            f"{_normalize_cell(row.get('Age')):<4} | "
+            f"{_normalize_cell(row.get('Fare')):<7} | "
+            f"{_normalize_cell(row.get('Cabin')):<5} | "
+            f"{_normalize_cell(row.get('Embarked')):<8} | "
+            f"{_normalize_cell(row.get('Ticket'))[:9]:<9} | "
+            f"{_normalize_cell(row.get('Pclass')):<5}"
+        )
+    return "\n".join(lines)
 
 
 TASKS: dict[str, Task] = {
@@ -172,6 +232,51 @@ TASKS: dict[str, Task] = {
         },
         tags=["data-cleaning", "adversarial", "sensor", "domain-knowledge"],
         success_criteria="Fix the 2 real issues and leave the 3 valid trap rows untouched.",
+    ),
+    "titanic_manifest": Task(
+        id="titanic_manifest",
+        name="Titanic Manifest Cleanup",
+        description=(
+            "A small slice of the Titanic passenger manifest contains real missing values from the Kaggle dataset. "
+            "Fill missing Age with a plausible numeric value, fill missing Embarked with a valid port code, "
+            "and replace missing Cabin with a consistent placeholder such as Unknown."
+        ),
+        difficulty=Difficulty.MEDIUM,
+        max_steps=6,
+        config={
+            "dataset_preview": _titanic_task_preview(),
+            "available_actions": ["fill_missing", "fix_value", "flag_anomaly"],
+            "issues": [
+                {
+                    "row_index": 0,
+                    "column": "Age",
+                    "issue_type": "missing",
+                    "value_type": "numeric_range",
+                    "min": 0,
+                    "max": 80,
+                },
+                {
+                    "row_index": 1,
+                    "column": "Embarked",
+                    "issue_type": "missing",
+                    "allowed_values": ["C", "Q", "S"],
+                },
+                {
+                    "row_index": 2,
+                    "column": "Embarked",
+                    "issue_type": "missing",
+                    "allowed_values": ["C", "Q", "S"],
+                },
+                {
+                    "row_index": 3,
+                    "column": "Cabin",
+                    "issue_type": "missing",
+                    "allowed_values": ["Unknown", "UNKNOWN", "missing", "MISSING"],
+                },
+            ],
+        },
+        tags=["data-cleaning", "titanic", "missing-values", "demo"],
+        success_criteria="Repair the 4 missing manifest fields using plausible values and consistent placeholders.",
     ),
 }
 

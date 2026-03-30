@@ -11,8 +11,22 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, stat
 from fastapi.middleware.cors import CORSMiddleware
 
 from baseline.inference import run_baseline
-from environment import TASKS, Action, OpenEnv, get_task, grade_episode
-from environment.models import BaselineRequest, GraderRequest, ResetRequest
+from environment import (
+    TASKS,
+    Action,
+    OpenEnv,
+    get_task,
+    grade_episode,
+    prepare_and_evaluate_dataset,
+    prepare_dataset,
+)
+from environment.models import (
+    BaselineRequest,
+    DatasetEvaluationRequest,
+    DatasetPreparationRequest,
+    GraderRequest,
+    ResetRequest,
+)
 
 
 APP_VERSION = "1.0.0"
@@ -209,6 +223,41 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:  # pragma: no cover - defensive surface for remote APIs
             raise HTTPException(status_code=500, detail=f"Baseline inference failed: {exc}") from exc
+
+    @app.post("/prepare-dataset")
+    def prepare_dataset_endpoint(request: DatasetPreparationRequest) -> dict[str, Any]:
+        try:
+            artifacts = prepare_dataset(
+                csv_path=request.csv_path,
+                target_column=request.target_column,
+                output_dir=request.output_dir,
+                validation_fraction=request.validation_fraction,
+                random_seed=request.random_seed,
+            )
+            return artifacts.as_dict()
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:  # pragma: no cover - defensive safety for live file processing
+            raise HTTPException(status_code=500, detail=f"Dataset preparation failed: {exc}") from exc
+
+    @app.post("/prepare-and-evaluate")
+    def prepare_and_evaluate_endpoint(request: DatasetEvaluationRequest) -> dict[str, Any]:
+        try:
+            return prepare_and_evaluate_dataset(
+                csv_path=request.csv_path,
+                target_column=request.target_column,
+                output_dir=request.output_dir,
+                validation_fraction=request.validation_fraction,
+                random_seed=request.random_seed,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:  # pragma: no cover - defensive safety for live file processing
+            raise HTTPException(status_code=500, detail=f"Prepare-and-evaluate failed: {exc}") from exc
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket) -> None:

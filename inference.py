@@ -19,8 +19,9 @@ from environment.models import Action
 API_BASE_URL = os.environ["API_BASE_URL"]
 MODEL_NAME = os.environ["MODEL_NAME"]
 HF_TOKEN = os.environ["HF_TOKEN"]
-API_KEY = os.environ.get("OPENAI_API_KEY", HF_TOKEN)
+API_KEY = os.environ.get("GROQ_API_KEY") or os.environ.get("OPENAI_API_KEY", HF_TOKEN)
 ENVIRONMENT_URL = os.getenv("ENVIRONMENT_URL", "http://127.0.0.1:8000")
+TASK_ID = os.getenv("TASK_ID") or os.getenv("PREFERRED_TASK_ID")
 MAX_TOKENS = 256
 TEMPERATURE = 0.2
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "30"))
@@ -30,7 +31,7 @@ SYSTEM_PROMPT = (
     "You are an expert data cleaning agent. "
     "You will be shown a dirty tabular dataset preview. "
     "Choose exactly one cleaning action at a time. "
-    "Respond ONLY in valid JSON with no extra text: "
+    "Respond ONLY in valid JSON with no extra text, no markdown fences, and no explanation outside the JSON object. "
     '{"action_type":"fix_value","row_index":2,"column":"email","new_value":"user@example.com","reason":"row 2 email is missing"}'
 )
 
@@ -98,6 +99,12 @@ def fallback_action(task_id: str, step: int) -> Action:
             {"action_type": "fill_missing", "row_index": 2, "column": "reading", "new_value": None, "reason": "reading is missing"},
             {"action_type": "flag_anomaly", "row_index": 5, "column": "reading", "new_value": None, "reason": "999C is an impossible outlier"},
         ],
+        "titanic_manifest": [
+            {"action_type": "fill_missing", "row_index": 0, "column": "Age", "new_value": 28, "reason": "impute a plausible numeric age"},
+            {"action_type": "fill_missing", "row_index": 1, "column": "Embarked", "new_value": "C", "reason": "fill a valid port code"},
+            {"action_type": "fill_missing", "row_index": 2, "column": "Embarked", "new_value": "C", "reason": "fill a valid port code"},
+            {"action_type": "fill_missing", "row_index": 3, "column": "Cabin", "new_value": "Unknown", "reason": "use a consistent placeholder"},
+        ],
     }
     plan = action_plans[task_id]
     return Action.model_validate(plan[min(step, len(plan) - 1)])
@@ -112,10 +119,22 @@ def main() -> None:
         tasks_response = env_client.get("/tasks")
         tasks_response.raise_for_status()
         tasks = tasks_response.json()
-        chosen_task = next(
-            (task for task in tasks if task.get("id") == "adversarial_sensor" or task.get("task_id") == "adversarial_sensor"),
-            None,
-        )
+        chosen_task = None
+        if TASK_ID:
+            chosen_task = next(
+                (
+                    task
+                    for task in tasks
+                    if task.get("id") == TASK_ID or task.get("task_id") == TASK_ID
+                ),
+                None,
+            )
+
+        if chosen_task is None:
+            chosen_task = next(
+                (task for task in tasks if task.get("id") == "adversarial_sensor" or task.get("task_id") == "adversarial_sensor"),
+                None,
+            )
         if chosen_task is None:
             chosen_task = next((task for task in tasks if task["difficulty"] == "hard"), tasks[0])
 
@@ -145,12 +164,21 @@ def main() -> None:
             attempt_number += 1
 
             try:
-                completion = llm_client.chat.completions.create(
-                    model=MODEL_NAME,
-                    messages=messages,
-                    temperature=TEMPERATURE,
-                    max_tokens=MAX_TOKENS,
-                )
+                try:
+                    completion = llm_client.chat.completions.create(
+                        model=MODEL_NAME,
+                        messages=messages,
+                        temperature=TEMPERATURE,
+                        max_tokens=MAX_TOKENS,
+                        response_format={"type": "json_object"},
+                    )
+                except Exception:
+                    completion = llm_client.chat.completions.create(
+                        model=MODEL_NAME,
+                        messages=messages,
+                        temperature=TEMPERATURE,
+                        max_tokens=MAX_TOKENS,
+                    )
                 response_text = completion.choices[0].message.content or ""
                 action = parse_model_action(response_text)
             except Exception as exc:  # noqa: BLE001
