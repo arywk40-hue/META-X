@@ -20,6 +20,55 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _parse_dataset_preview(dataset_preview: str) -> tuple[list[str], list[dict[str, Any]]]:
+    lines = [line.rstrip() for line in dataset_preview.strip().splitlines() if line.strip()]
+    if len(lines) < 3:
+        return [], []
+
+    headers = [segment.strip() for segment in lines[0].split("|")]
+    rows: list[dict[str, Any]] = []
+    for line in lines[2:]:
+        values = [segment.strip() for segment in line.split("|")]
+        if len(values) < len(headers):
+            values.extend([""] * (len(headers) - len(values)))
+        elif len(values) > len(headers):
+            values = values[: len(headers)]
+        row = {header: values[index] for index, header in enumerate(headers)}
+        row["__row_status__"] = "active"
+        rows.append(row)
+
+    return headers, rows
+
+
+def _render_dataset_preview(headers: list[str], rows: list[dict[str, Any]]) -> str:
+    if not headers:
+        return ""
+
+    rendered_rows: list[list[str]] = []
+    for row in rows:
+        rendered_row: list[str] = []
+        dropped = row.get("__row_status__") == "dropped"
+        for header in headers:
+            if dropped and header != "row_id":
+                rendered_row.append("<DROPPED>")
+            else:
+                rendered_row.append(str(row.get(header, "")))
+        rendered_rows.append(rendered_row)
+
+    widths = [len(header) for header in headers]
+    for row in rendered_rows:
+        for index, value in enumerate(row):
+            widths[index] = max(widths[index], len(value))
+
+    header_line = " | ".join(f"{header:<{widths[index]}}" for index, header in enumerate(headers))
+    separator_line = "-|-".join("-" * width for width in widths)
+    row_lines = [
+        " | ".join(f"{value:<{widths[index]}}" for index, value in enumerate(row))
+        for row in rendered_rows
+    ]
+    return "\n".join([header_line, separator_line, *row_lines])
+
+
 class OpenEnvBase(ABC):
     @abstractmethod
     def reset(self, task_id: str | None = None, seed: int | None = None) -> Observation:
@@ -77,6 +126,9 @@ class OpenEnv(OpenEnvBase):
                 "total_issues": len(issues),
                 "traps": set(traps),
             }
+            headers, rows = _parse_dataset_preview(task.config.get("dataset_preview", ""))
+            self.task_state["dataset_headers"] = headers
+            self.task_state["dataset_rows"] = rows
             self.current_observation = self._build_observation()
             return self.current_observation
 
@@ -208,6 +260,7 @@ class OpenEnv(OpenEnvBase):
                         fixed.add(key)
                         issues_fixed_this_step += 1
                         matched_issue = issue
+                        self._apply_action_to_dataset(issue, action)
                         break
 
         if trap_penalty:
@@ -252,12 +305,47 @@ class OpenEnv(OpenEnvBase):
 
         return True
 
+    def _apply_action_to_dataset(self, issue: dict[str, Any], action: Action) -> None:
+        headers: list[str] = self.task_state.get("dataset_headers", [])
+        rows: list[dict[str, Any]] = self.task_state.get("dataset_rows", [])
+        if not headers or not rows:
+            return
+
+        row_index = issue["row_index"]
+        if row_index < 0 or row_index >= len(rows):
+            return
+
+        row = rows[row_index]
+        column = str(issue["column"]).strip()
+        action_type = action.action_type
+        current_value = str(row.get(column, ""))
+
+        if action_type == "drop_row":
+            row["__row_status__"] = "dropped"
+            return
+
+        if action_type == "flag_anomaly":
+            if "[FLAGGED]" not in current_value:
+                row[column] = f"{current_value} [FLAGGED]"
+            return
+
+        if action.new_value is None:
+            if issue["issue_type"] in {"missing", "string_null", "null"}:
+                row[column] = "<FILLED>"
+            return
+
+        row[column] = str(action.new_value)
+
     def _build_observation(self) -> Observation:
         task = self.current_task
         if task is None:
             raise RuntimeError("Environment not reset.")
 
         attempts_remaining = int(self.task_state.get("attempts_remaining", task.max_steps))
+        dataset_preview = _render_dataset_preview(
+            self.task_state.get("dataset_headers", []),
+            self.task_state.get("dataset_rows", []),
+        ) or task.config["dataset_preview"]
         context = (
             "Episode complete."
             if self.done
@@ -268,7 +356,7 @@ class OpenEnv(OpenEnvBase):
             task_id=task.id,
             task_name=task.name,
             task_description=task.description.strip(),
-            dataset_preview=task.config["dataset_preview"],
+            dataset_preview=dataset_preview,
             issues_remaining=self._issues_remaining(),
             step=self.step_count,
             max_steps=task.max_steps,

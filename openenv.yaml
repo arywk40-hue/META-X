@@ -39,3 +39,7 @@ tasks:
     name: Adversarial Sensor Data
     difficulty: hard
     max_steps: 8
+  - id: titanic_manifest
+    name: Titanic Manifest Cleanup
+    difficulty: medium
+    max_steps: 6

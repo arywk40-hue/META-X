@@ -18,8 +18,10 @@ from environment.models import Action
 
 API_BASE_URL = os.environ["API_BASE_URL"]
 MODEL_NAME = os.environ["MODEL_NAME"]
-HF_TOKEN = os.environ["HF_TOKEN"]
-API_KEY = os.environ.get("GROQ_API_KEY") or os.environ.get("OPENAI_API_KEY", HF_TOKEN)
+HF_TOKEN = os.environ.get("HF_TOKEN")
+API_KEY = os.environ.get("OPENAI_API_KEY") or os.environ.get("GROQ_API_KEY") or HF_TOKEN
+if not API_KEY:
+    raise KeyError("Set OPENAI_API_KEY (preferred), GROQ_API_KEY, or HF_TOKEN before running inference.py")
 ENVIRONMENT_URL = os.getenv("ENVIRONMENT_URL", "http://127.0.0.1:8000")
 TASK_ID = os.getenv("TASK_ID") or os.getenv("PREFERRED_TASK_ID")
 MAX_TOKENS = 256

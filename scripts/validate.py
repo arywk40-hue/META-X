@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 
 from fastapi.testclient import TestClient
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -26,9 +27,12 @@ def validate_manifest() -> None:
     manifest_path = ROOT / "openenv.yaml"
     _check(manifest_path.exists(), "openenv.yaml exists")
     manifest_text = manifest_path.read_text()
+    manifest = yaml.safe_load(manifest_text)
     _check("name: data-cleaning-env" in manifest_text, "manifest name is correct")
     _check("tags:" in manifest_text and "openenv" in manifest_text, "manifest includes openenv tag")
-    _check("tasks:" in manifest_text and manifest_text.count("- id:") >= 5, "manifest lists the data-cleaning benchmark")
+    manifest_task_ids = [task["id"] for task in manifest.get("tasks", [])]
+    _check(len(manifest_task_ids) == len(TASKS), "manifest task count matches runtime task count")
+    _check(set(manifest_task_ids) == set(TASKS), "manifest task ids match runtime task ids")
 
 
 def validate_inference_script() -> None:
