@@ -265,6 +265,8 @@ class DatasetPreparationRequest(BaseModel):
     output_dir: str | None = None
     validation_fraction: float = Field(default=0.2, gt=0.0, lt=0.5)
     random_seed: int = Field(default=42)
+    use_eda_agent: bool = False
+    eda_use_llm: bool = False
 
 
 class DatasetEvaluationRequest(BaseModel):
@@ -273,3 +275,5 @@ class DatasetEvaluationRequest(BaseModel):
     output_dir: str | None = None
     validation_fraction: float = Field(default=0.2, gt=0.0, lt=0.5)
     random_seed: int = Field(default=42)
+    use_eda_agent: bool = False
+    eda_use_llm: bool = False

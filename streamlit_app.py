@@ -173,6 +173,21 @@ with config_cols[2]:
 with config_cols[3]:
     run_label = st.text_input("Run label", value=_save_upload.__name__.replace("_save_upload", "latest_run"))
 
+eda_cols = st.columns([1.0, 1.0], gap="medium")
+with eda_cols[0]:
+    use_eda_agent = st.checkbox(
+        "Enable EDA agent",
+        value=True,
+        help="Run schema-aware EDA first so the pipeline can handle new columns and unfamiliar datasets more robustly.",
+    )
+with eda_cols[1]:
+    eda_use_llm = st.checkbox(
+        "Use LLM for EDA agent",
+        value=False,
+        help="Requires API credentials. When off, the EDA agent still runs with statistical heuristics.",
+        disabled=not use_eda_agent,
+    )
+
 run_dir = RUN_ROOT / f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{run_label.strip().replace(' ', '_')}"
 
 if st.button("Run pipeline", type="primary", use_container_width=True):
@@ -183,6 +198,8 @@ if st.button("Run pipeline", type="primary", use_container_width=True):
                 target_column=target_column or None,
                 output_dir=str(run_dir),
                 validation_fraction=validation_fraction,
+                use_eda_agent=use_eda_agent,
+                eda_use_llm=eda_use_llm,
             ).as_dict()
             st.session_state["metax_result"] = {"preparation": result, "evaluation": None}
         else:
@@ -194,6 +211,8 @@ if st.button("Run pipeline", type="primary", use_container_width=True):
                 target_column=target_column,
                 output_dir=str(run_dir),
                 validation_fraction=validation_fraction,
+                use_eda_agent=use_eda_agent,
+                eda_use_llm=eda_use_llm,
             )
             st.session_state["metax_result"] = result
 
@@ -226,6 +245,32 @@ if result:
     with downloads[3]:
         _download_button(prep.get("manifest_path"), "Download Feature Manifest", mime="application/json")
 
+    report_downloads = st.columns(4)
+    with report_downloads[0]:
+        _download_button(prep.get("profile_path"), "Download Profile JSON", mime="application/json")
+    with report_downloads[1]:
+        _download_button(prep.get("work_queue_path"), "Download Work Queue JSON", mime="application/json")
+    with report_downloads[2]:
+        _download_button(prep.get("markdown_report_path"), "Download Markdown Report", mime="text/markdown")
+    with report_downloads[3]:
+        _download_button(prep.get("latex_report_path"), "Download LaTeX Report", mime="text/plain")
+
+    if prep.get("eda_enabled"):
+        st.subheader("EDA Agent")
+        st.write(
+            {
+                "used_llm": prep.get("eda_used_llm", False),
+                "feature_steps": prep.get("eda_feature_engineering_steps", 0),
+                "summary": prep.get("eda_summary"),
+                "recommendations": prep.get("eda_recommendations", []),
+            }
+        )
+        eda_downloads = st.columns(2)
+        with eda_downloads[0]:
+            _download_button(prep.get("eda_report_path"), "Download EDA Report JSON", mime="application/json")
+        with eda_downloads[1]:
+            _download_button(prep.get("eda_markdown_path"), "Download EDA Markdown", mime="text/markdown")
+
     if eval_result:
         st.subheader("Evaluation Summary")
         eval_cards = st.columns(3)
@@ -240,7 +285,13 @@ if result:
         st.dataframe(leaderboard_df, use_container_width=True, hide_index=True)
 
         report_path = eval_result.get("evaluation_report_path")
-        _download_button(report_path, "Download Evaluation Report", mime="application/json")
+        eval_downloads = st.columns(3)
+        with eval_downloads[0]:
+            _download_button(report_path, "Download Evaluation Report", mime="application/json")
+        with eval_downloads[1]:
+            _download_button(eval_result.get("markdown_report_path"), "Download Final Markdown Report", mime="text/markdown")
+        with eval_downloads[2]:
+            _download_button(eval_result.get("latex_report_path"), "Download Final LaTeX Report", mime="text/plain")
         if report_path:
             with st.expander("Evaluation Report JSON"):
                 st.code(_load_text(report_path), language="json")

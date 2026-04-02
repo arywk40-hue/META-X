@@ -28,6 +28,7 @@ from sklearn.metrics import (
 )
 
 from .data_prep import DatasetPreparationArtifacts, prepare_dataset
+from .reporting import write_report_bundle
 
 
 os.environ.setdefault("LOKY_MAX_CPU_COUNT", "1")
@@ -187,6 +188,8 @@ def prepare_and_evaluate_dataset(
     output_dir: str | None = None,
     validation_fraction: float = 0.2,
     random_seed: int = 42,
+    use_eda_agent: bool = False,
+    eda_use_llm: bool = False,
 ) -> dict[str, Any]:
     preparation = prepare_dataset(
         csv_path=csv_path,
@@ -194,11 +197,29 @@ def prepare_and_evaluate_dataset(
         output_dir=output_dir,
         validation_fraction=validation_fraction,
         random_seed=random_seed,
+        use_eda_agent=use_eda_agent,
+        eda_use_llm=eda_use_llm,
     )
     evaluation = evaluate_prepared_dataset(preparation, random_seed=random_seed)
+    profile_payload = json.loads(Path(preparation.summary["profile_path"]).read_text())
+    work_queue = json.loads(Path(preparation.summary["work_queue_path"]).read_text())
+    report_artifacts = write_report_bundle(
+        dataset_name=preparation.summary["dataset_name"],
+        output_dir=preparation.summary["output_dir"],
+        source_profile=profile_payload["source_profile"],
+        prepared_profile=profile_payload["prepared_profile"],
+        work_queue=work_queue,
+        preparation_summary=preparation.summary,
+        evaluation_summary=evaluation.summary,
+    )
     return {
         "preparation": preparation.as_dict(),
-        "evaluation": evaluation.as_dict(),
+        "evaluation": {
+            **evaluation.as_dict(),
+            "markdown_report_path": report_artifacts["markdown_report_path"],
+            "latex_report_path": report_artifacts["latex_report_path"],
+            "graph_paths": report_artifacts["graph_paths"],
+        },
         "best_model": evaluation.summary["best_model"],
         "best_primary_metric": evaluation.summary["best_primary_metric"],
         "primary_metric_name": evaluation.summary["primary_metric_name"],

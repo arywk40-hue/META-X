@@ -233,6 +233,8 @@ def create_app(
                 output_dir=request.output_dir,
                 validation_fraction=request.validation_fraction,
                 random_seed=request.random_seed,
+                use_eda_agent=request.use_eda_agent,
+                eda_use_llm=request.eda_use_llm,
             )
             return artifacts.as_dict()
         except FileNotFoundError as exc:
@@ -251,6 +253,8 @@ def create_app(
                 output_dir=request.output_dir,
                 validation_fraction=request.validation_fraction,
                 random_seed=request.random_seed,
+                use_eda_agent=request.use_eda_agent,
+                eda_use_llm=request.eda_use_llm,
             )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

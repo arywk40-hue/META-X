@@ -15,6 +15,8 @@ def main() -> None:
     parser.add_argument("--output-dir", default=None, help="Directory for prepared artifacts and evaluation report.")
     parser.add_argument("--validation-fraction", type=float, default=0.2, help="Validation split fraction.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for deterministic splitting.")
+    parser.add_argument("--use-eda-agent", action="store_true", help="Run the schema-aware EDA agent before preparation.")
+    parser.add_argument("--eda-use-llm", action="store_true", help="Allow the EDA agent to call an LLM when credentials are available.")
     args = parser.parse_args()
 
     result = prepare_and_evaluate_dataset(
@@ -23,6 +25,8 @@ def main() -> None:
         output_dir=args.output_dir,
         validation_fraction=args.validation_fraction,
         random_seed=args.seed,
+        use_eda_agent=args.use_eda_agent,
+        eda_use_llm=args.eda_use_llm,
     )
     print(json.dumps(result, indent=2))
 

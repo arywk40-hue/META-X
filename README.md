@@ -16,7 +16,7 @@ tags:
 
 This repository is a production-ready OpenEnv environment for real-world tabular data cleaning. It exposes a FastAPI-compatible API, deterministic graders, dense reward shaping, and a root `inference.py` runner that uses an OpenAI-compatible client for live evaluation.
 
-It also now includes a generic dataset-preparation workflow for arbitrary CSV files. You can feed in a dataset, optionally specify a target column, and get back train-ready CSV artifacts plus a feature manifest.
+It also now includes a generic dataset-preparation workflow for arbitrary CSV files. You can feed in a dataset, optionally specify a target column, and get back train-ready CSV artifacts, schema/work-queue reports, and optional EDA-agent feature engineering for unfamiliar schemas.
 
 ## Quick Start
 
@@ -185,7 +185,8 @@ Prepare any CSV into train-ready artifacts:
 python prepare_dataset.py \
   --csv data/kaggle/Titanic-Dataset.csv \
   --target Survived \
-  --output-dir outputs/titanic
+  --output-dir outputs/titanic \
+  --use-eda-agent
 ```
 
 This writes:
@@ -194,6 +195,12 @@ This writes:
 - `*_prepared_train.csv`
 - `*_prepared_valid.csv`
 - `*_feature_manifest.json`
+- `reports/*_profile.json`
+- `reports/*_work_queue.json`
+- `reports/*_report.md`
+- `reports/*_report.tex`
+- `reports/graphs/*.svg`
+- `reports/*_eda_report.json` and `reports/*_eda_report.md` when the EDA agent is enabled
 
 There is also an HTTP endpoint:
 
@@ -203,9 +210,32 @@ curl -X POST http://127.0.0.1:8000/prepare-dataset \
   -d '{
     "csv_path": "data/kaggle/Titanic-Dataset.csv",
     "target_column": "Survived",
-    "output_dir": "outputs/titanic"
+    "output_dir": "outputs/titanic",
+    "use_eda_agent": true,
+    "eda_use_llm": false
   }'
 ```
+
+## EDA Agent
+
+The repo now includes a standalone EDA agent in [eda_agent.py](/Users/ariyanbhakat/Desktop/metax/eda_agent.py) and [environment/eda_agent.py](/Users/ariyanbhakat/Desktop/metax/environment/eda_agent.py).
+
+It does three useful things for arbitrary new datasets:
+
+- profiles columns without assuming fixed schemas
+- surfaces data-quality issues and correlation insights
+- proposes feature-engineering steps that can be applied before the main preparation pipeline
+
+Run it directly:
+
+```bash
+python eda_agent.py data/kaggle/Titanic-Dataset.csv Survived false
+```
+
+The last argument controls LLM use:
+
+- `false` = heuristic/statistical mode only
+- omit it or pass `true` = allow LLM-backed EDA when credentials exist
 
 ## Prepare and Evaluate
 
@@ -215,7 +245,8 @@ To prepare a dataset and immediately score it with fast baseline models:
 python prepare_and_evaluate.py \
   --csv data/kaggle/Titanic-Dataset.csv \
   --target Survived \
-  --output-dir outputs/titanic_eval
+  --output-dir outputs/titanic_eval \
+  --use-eda-agent
 ```
 
 This writes the prepared CSVs plus an evaluation report that ranks candidate models on the validation split.
@@ -228,7 +259,9 @@ curl -X POST http://127.0.0.1:8000/prepare-and-evaluate \
   -d '{
     "csv_path": "data/kaggle/Titanic-Dataset.csv",
     "target_column": "Survived",
-    "output_dir": "outputs/titanic_eval"
+    "output_dir": "outputs/titanic_eval",
+    "use_eda_agent": true,
+    "eda_use_llm": false
   }'
 ```
 
@@ -244,10 +277,11 @@ The UI supports:
 
 - CSV upload
 - dataset preview and missing-value profile
+- EDA-agent toggle for unknown or changing schemas
 - target-column selection
 - prepare-only mode
 - prepare-and-evaluate mode
-- direct download of train, validation, manifest, and evaluation report artifacts
+- direct download of train, validation, manifest, profile/work-queue JSON, Markdown/LaTeX reports, and evaluation artifacts
 
 ## Final Submission Check
 

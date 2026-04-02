@@ -41,6 +41,8 @@ def test_prepare_and_evaluate_dataset_returns_best_model(tmp_path: Path) -> None
     assert result["best_model"]
     assert result["primary_metric_name"] in {"accuracy", "roc_auc", "r2"}
     assert Path(result["evaluation"]["evaluation_report_path"]).exists()
+    assert Path(result["evaluation"]["markdown_report_path"]).exists()
+    assert Path(result["evaluation"]["latex_report_path"]).exists()
     assert len(result["evaluation"]["leaderboard"]) >= 2
 
 
@@ -61,3 +63,4 @@ def test_prepare_and_evaluate_endpoint(test_client, tmp_path: Path) -> None:
     payload = response.json()
     assert payload["best_model"]
     assert payload["evaluation"]["leaderboard"]
+    assert Path(payload["evaluation"]["markdown_report_path"]).exists()

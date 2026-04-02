@@ -11,6 +11,9 @@ from typing import Any
 import pandas as pd
 from pandas.api.types import is_bool_dtype, is_numeric_dtype
 
+from .eda_agent import EDAAgent, write_eda_artifacts
+from .reporting import build_dataset_profile, build_work_queue, write_profile_bundle, write_report_bundle
+
 
 LOW_CARDINALITY_THRESHOLD = 12
 HIGH_UNIQUE_RATIO = 0.95
@@ -257,6 +260,8 @@ def prepare_dataset(
     output_dir: str | None = None,
     validation_fraction: float = 0.2,
     random_seed: int = 42,
+    use_eda_agent: bool = False,
+    eda_use_llm: bool = False,
 ) -> DatasetPreparationArtifacts:
     source_path = Path(csv_path).expanduser().resolve()
     if not source_path.exists():
@@ -266,9 +271,24 @@ def prepare_dataset(
     destination = Path(output_dir).expanduser().resolve() if output_dir else (source_path.parent / f"{dataset_name}_prepared")
     destination.mkdir(parents=True, exist_ok=True)
 
-    df = pd.read_csv(source_path)
-    df.columns = [str(column).strip() for column in df.columns]
+    raw_df = pd.read_csv(source_path)
+    raw_df.columns = [str(column).strip() for column in raw_df.columns]
     steps: list[str] = []
+
+    source_profile = build_dataset_profile(raw_df, target_column)
+    work_queue = build_work_queue(source_profile)
+
+    eda_report = None
+    eda_artifacts: dict[str, str] = {}
+    df = raw_df.copy()
+    if use_eda_agent:
+        agent = EDAAgent(df, target_column=target_column, use_llm=eda_use_llm)
+        eda_report = agent.run()
+        eda_artifacts = write_eda_artifacts(eda_report, destination, dataset_name)
+        df = eda_report.apply(df)
+        steps.append(
+            f"Applied EDA agent feature engineering with {len(eda_report.feature_engineering_steps)} generated steps."
+        )
 
     original_shape = {"rows": int(len(df)), "columns": int(len(df.columns))}
     df = df.drop_duplicates().reset_index(drop=True)
@@ -291,6 +311,8 @@ def prepare_dataset(
     else:
         feature_columns = list(df.columns)
 
+    prepared_profile = build_dataset_profile(df, target_column)
+
     full_path = destination / f"{dataset_name}_prepared_full.csv"
     train_path: Path | None = None
     valid_path: Path | None = None
@@ -310,6 +332,26 @@ def prepare_dataset(
             f"Split prepared dataset into train ({len(train_df)} rows) and valid ({len(valid_df)} rows)."
         )
 
+    profile_artifacts = write_profile_bundle(
+        dataset_name=dataset_name,
+        output_dir=destination,
+        source_profile=source_profile,
+        prepared_profile=prepared_profile,
+        work_queue=work_queue,
+    )
+    report_artifacts = write_report_bundle(
+        dataset_name=dataset_name,
+        output_dir=destination,
+        source_profile=source_profile,
+        prepared_profile=prepared_profile,
+        work_queue=work_queue,
+        preparation_summary={
+            "steps": steps,
+            "feature_count": len(feature_columns),
+        },
+        evaluation_summary=None,
+    )
+
     summary = {
         "dataset_name": dataset_name,
         "source_path": str(source_path),
@@ -324,6 +366,30 @@ def prepare_dataset(
         "encoded_columns": encoded_columns,
         "encoding_map": encoding_map,
         "steps": steps,
+        "wide_dataset_mode": source_profile["wide_dataset"],
+        "source_profile_overview": {
+            "rows": source_profile["rows"],
+            "columns": source_profile["columns"],
+            "missing_cells": source_profile["missing_cells"],
+            "duplicate_rows": source_profile["duplicate_rows"],
+            "top_suspicious_columns": [item["column"] for item in source_profile["top_suspicious_columns"]],
+        },
+        "work_queue_overview": {
+            "workstream_count": len(work_queue["workstreams"]),
+            "column_batch_count": len(work_queue["column_batches"]),
+            "first_workstreams": [item["workstream"] for item in work_queue["workstreams"][:5]],
+        },
+        "profile_path": profile_artifacts["profile_path"],
+        "work_queue_path": profile_artifacts["work_queue_path"],
+        "markdown_report_path": report_artifacts["markdown_report_path"],
+        "latex_report_path": report_artifacts["latex_report_path"],
+        "graph_paths": report_artifacts["graph_paths"],
+        "eda_enabled": use_eda_agent,
+        "eda_used_llm": bool(eda_use_llm and eda_report is not None and eda_report.llm_provider != "none"),
+        "eda_summary": eda_report.agent_summary if eda_report else None,
+        "eda_recommendations": eda_report.agent_recommendations if eda_report else [],
+        "eda_feature_engineering_steps": len(eda_report.feature_engineering_steps) if eda_report else 0,
+        **eda_artifacts,
         "ready_for_training": True,
         "recommended_model_family": "tree_based_boosting_or_linear_baseline",
     }

@@ -4,6 +4,14 @@ from .env import OpenEnv, OpenEnvBase
 from .evaluation import DatasetEvaluationArtifacts, evaluate_prepared_dataset, prepare_and_evaluate_dataset
 from .graders import GRADERS, get_grader, grade_episode
 from .data_prep import DatasetPreparationArtifacts, prepare_dataset
+from .eda_agent import (
+    ColumnProfile,
+    CorrelationInsight,
+    EDAAgent,
+    EDAReport,
+    FeatureEngineeringStep,
+    write_eda_artifacts,
+)
 from .models import (
     Action,
     DatasetEvaluationRequest,
@@ -23,6 +31,8 @@ from .tasks import TASKS, get_default_task, get_task, get_tasks_by_difficulty
 
 __all__ = [
     "Action",
+    "ColumnProfile",
+    "CorrelationInsight",
     "DatasetEvaluationArtifacts",
     "DatasetEvaluationRequest",
     "DatasetPreparationArtifacts",
@@ -32,6 +42,9 @@ __all__ = [
     "DataCleaningReward",
     "DataCleaningState",
     "Difficulty",
+    "EDAAgent",
+    "EDAReport",
+    "FeatureEngineeringStep",
     "GRADERS",
     "Observation",
     "OpenEnv",
@@ -49,4 +62,5 @@ __all__ = [
     "evaluate_prepared_dataset",
     "prepare_dataset",
     "prepare_and_evaluate_dataset",
+    "write_eda_artifacts",
 ]

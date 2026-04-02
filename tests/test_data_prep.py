@@ -39,9 +39,35 @@ def test_prepare_dataset_writes_artifacts(tmp_path: Path) -> None:
     assert Path(payload["prepared_train_path"]).exists()
     assert Path(payload["prepared_valid_path"]).exists()
     assert Path(payload["manifest_path"]).exists()
+    assert Path(payload["profile_path"]).exists()
+    assert Path(payload["work_queue_path"]).exists()
+    assert Path(payload["markdown_report_path"]).exists()
+    assert Path(payload["latex_report_path"]).exists()
     assert payload["target_column"] == "target"
     assert payload["ready_for_training"] is True
     assert payload["feature_count"] > 0
+
+
+def test_prepare_dataset_with_eda_agent_generates_eda_artifacts(tmp_path: Path) -> None:
+    csv_path = tmp_path / "sample.csv"
+    output_dir = tmp_path / "prepared_eda"
+    _write_sample_csv(csv_path)
+
+    artifacts = prepare_dataset(
+        csv_path=str(csv_path),
+        target_column="target",
+        output_dir=str(output_dir),
+        validation_fraction=0.25,
+        random_seed=7,
+        use_eda_agent=True,
+        eda_use_llm=False,
+    )
+
+    payload = artifacts.as_dict()
+    assert payload["eda_enabled"] is True
+    assert payload["eda_feature_engineering_steps"] >= 1
+    assert Path(payload["eda_report_path"]).exists()
+    assert Path(payload["eda_markdown_path"]).exists()
 
 
 def test_prepare_dataset_endpoint(test_client, tmp_path: Path) -> None:
@@ -61,3 +87,4 @@ def test_prepare_dataset_endpoint(test_client, tmp_path: Path) -> None:
     payload = response.json()
     assert payload["ready_for_training"] is True
     assert Path(payload["prepared_full_path"]).exists()
+    assert Path(payload["markdown_report_path"]).exists()
