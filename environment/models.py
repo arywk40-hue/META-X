@@ -29,6 +29,11 @@ ACTION_SCHEMA = {
                 "rename_column",
                 "flag_anomaly",
                 "standardize_format",
+                "extract_pattern",
+                "replace_regex",
+                "merge_similar_categories",
+                "knn_impute",
+                "mean_impute"
             ],
         },
         "row_index": {
@@ -117,6 +122,11 @@ class DataCleaningAction(BaseModel):
             "rename_column",
             "flag_anomaly",
             "standardize_format",
+            "extract_pattern",
+            "replace_regex",
+            "merge_similar_categories",
+            "knn_impute",
+            "mean_impute",
         }
         cleaned = aliases.get(v.strip().lower(), v.strip().lower())
         if cleaned not in valid:
@@ -267,6 +277,8 @@ class DatasetPreparationRequest(BaseModel):
     random_seed: int = Field(default=42)
     use_eda_agent: bool = False
     eda_use_llm: bool = False
+    eda_llm_strategy: str = "single_pass"
+    eda_llm_rounds: int = Field(default=2, ge=1, le=3)
 
 
 class DatasetEvaluationRequest(BaseModel):
@@ -277,3 +289,13 @@ class DatasetEvaluationRequest(BaseModel):
     random_seed: int = Field(default=42)
     use_eda_agent: bool = False
     eda_use_llm: bool = False
+    eda_llm_strategy: str = "single_pass"
+    eda_llm_rounds: int = Field(default=2, ge=1, le=3)
+
+
+class DynamicTaskRequest(BaseModel):
+    csv_path: str
+    task_id: str | None = None
+    max_issues: int = Field(default=7, ge=1, le=12)
+    max_preview_rows: int = Field(default=12, ge=3, le=25)
+    seed: int | None = None

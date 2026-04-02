@@ -81,6 +81,8 @@ The environment now ships with six data-cleaning tasks across three difficulty t
 
 Only public task metadata is exposed via `/tasks`. The graders score action histories deterministically and reward partial progress.
 
+In addition to the fixed benchmark, the app can generate a **session-local dynamic cleaning episode** from any uploaded CSV. These dynamic tasks do not appear in `/tasks`, so the benchmark stays stable for validation and judging.
+
 ## Action, Observation, Reward
 
 Action space:
@@ -119,7 +121,7 @@ Reward space:
 
 ## Inference
 
-The hackathon-compatible inference entrypoint lives at the repo root as `inference.py`. It uses the OpenAI client with `API_BASE_URL`, `MODEL_NAME`, and `HF_TOKEN`, then drives the OpenEnv HTTP API.
+The submission-compatible inference entrypoint lives at the repo root as `inference.py`. It uses the OpenAI client with `API_BASE_URL`, `MODEL_NAME`, and `HF_TOKEN`, then drives the OpenEnv HTTP API.
 
 Start the environment first:
 
@@ -132,7 +134,7 @@ Then run inference:
 ```bash
 export API_BASE_URL=https://router.huggingface.co/v1
 export MODEL_NAME=your-model-name
-export OPENAI_API_KEY=your_api_key
+export HF_TOKEN=your_api_key
 python inference.py
 ```
 
@@ -144,12 +146,50 @@ python -m baseline.inference
 
 The internal baseline keeps a heuristic fallback for smoke tests and CI. The root `inference.py` is the submission-oriented script.
 
-The root script accepts:
+Required submission environment variables:
 
-- `OPENAI_API_KEY` as the primary API key variable
 - `API_BASE_URL`
 - `MODEL_NAME`
-- optional `HF_TOKEN` or `GROQ_API_KEY` for compatible providers
+- `HF_TOKEN`
+
+Local developer convenience fallbacks still work for compatible providers, but the submission path is built around `HF_TOKEN`.
+
+### Required STDOUT Format
+
+The root `inference.py` now emits only the evaluator-facing line types on stdout:
+
+```text
+[START] task=<task_name> env=<benchmark> model=<model_name>
+[STEP] step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+[END] success=<true|false> steps=<n> score=<0.000> rewards=<r1,r2,...,rn>
+```
+
+Notes:
+
+- one `[START]` line per episode
+- one `[STEP]` line immediately after each environment step
+- one `[END]` line always emitted, even if inference falls back or errors
+- all rewards are formatted to 2 decimals
+- `success` and `done` are lowercase booleans
+- any unexpected diagnostic output is sent to stderr, not stdout
+
+### Submission Checklist
+
+Before submitting, run the following:
+
+```bash
+python -m pytest -q
+python scripts/validate.py
+openenv validate
+docker build .
+python inference.py
+```
+
+For hosted validation, also confirm:
+
+- your HF Space returns `200` on `POST /reset`
+- the submitted `inference.py` completes without error
+- the root script stays under the `2 vCPU / 8 GB / <20 min` constraints
 
 ## Baseline Scores
 
@@ -224,7 +264,7 @@ It does three useful things for arbitrary new datasets:
 
 - profiles columns without assuming fixed schemas
 - surfaces data-quality issues and correlation insights
-- proposes feature-engineering steps that can be applied before the main preparation pipeline
+- proposes feature-engineering steps that are validated against the live dataframe schema before they can be applied
 
 Run it directly:
 
@@ -234,8 +274,15 @@ python eda_agent.py data/kaggle/Titanic-Dataset.csv Survived false
 
 The last argument controls LLM use:
 
-- `false` = heuristic/statistical mode only
-- omit it or pass `true` = allow LLM-backed EDA when credentials exist
+- `false` = deterministic statistical EDA only
+- omit it or pass `true` = deterministic EDA plus validated LLM suggestions when credentials exist
+
+The important behavior is:
+
+- deterministic profiling always runs first
+- heuristic feature-engineering steps are always available
+- the LLM can only add extra ideas on top
+- unsafe or schema-breaking LLM steps are rejected before they touch the dataset
 
 ## Prepare and Evaluate
 
@@ -265,6 +312,29 @@ curl -X POST http://127.0.0.1:8000/prepare-and-evaluate \
   }'
 ```
 
+## Dynamic OpenEnv Tasks From Any CSV
+
+For arbitrary unseen schemas, you can generate a one-off OpenEnv cleaning episode directly from a CSV:
+
+```bash
+curl -X POST http://127.0.0.1:8000/generate-dynamic-task \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "csv_path": "data/kaggle/Titanic-Dataset.csv",
+    "max_issues": 7,
+    "max_preview_rows": 12
+  }'
+```
+
+This endpoint:
+
+- profiles the uploaded CSV deterministically
+- detects real issues like missing values, literal null strings, duplicates, outliers, negative values, and date-format problems
+- creates a **session-local** OpenEnv task plus matching deterministic grader
+- returns a normal observation/session pair that you can continue with `/step`, `/state`, and `/grader`
+
+The important design choice is that these dynamic tasks are **not added to the shared benchmark registry**. `/tasks` stays fixed and reproducible, while custom CSV episodes stay isolated to the current session.
+
 ## Streamlit UI
 
 Launch the CSV upload UI:
@@ -278,6 +348,7 @@ The UI supports:
 - CSV upload
 - dataset preview and missing-value profile
 - EDA-agent toggle for unknown or changing schemas
+- dynamic OpenEnv task generation from the uploaded CSV
 - target-column selection
 - prepare-only mode
 - prepare-and-evaluate mode

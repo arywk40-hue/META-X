@@ -44,6 +44,9 @@ def validate_inference_script() -> None:
     _check("HF_TOKEN" in contents, "inference.py references HF_TOKEN")
     _check("OPENAI_API_KEY" in contents, "inference.py supports OPENAI_API_KEY fallback")
     _check("OpenAI(" in contents, "inference.py uses the OpenAI client")
+    _check("[START]" in contents, "inference.py emits [START] logs")
+    _check("[STEP]" in contents, "inference.py emits [STEP] logs")
+    _check("[END]" in contents, "inference.py emits [END] logs")
 
 
 def validate_dockerfile() -> None:

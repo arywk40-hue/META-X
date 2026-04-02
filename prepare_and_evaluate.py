@@ -15,8 +15,28 @@ def main() -> None:
     parser.add_argument("--output-dir", default=None, help="Directory for prepared artifacts and evaluation report.")
     parser.add_argument("--validation-fraction", type=float, default=0.2, help="Validation split fraction.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for deterministic splitting.")
-    parser.add_argument("--use-eda-agent", action="store_true", help="Run the schema-aware EDA agent before preparation.")
-    parser.add_argument("--eda-use-llm", action="store_true", help="Allow the EDA agent to call an LLM when credentials are available.")
+    parser.add_argument(
+        "--use-eda-agent",
+        action="store_true",
+        help="Run deterministic, schema-grounded EDA before preparation.",
+    )
+    parser.add_argument(
+        "--eda-use-llm",
+        action="store_true",
+        help="Allow validated LLM suggestions on top of deterministic EDA when credentials are available.",
+    )
+    parser.add_argument(
+        "--eda-llm-strategy",
+        choices=["single_pass", "planner_reviewer"],
+        default="single_pass",
+        help="LLM orchestration mode for EDA suggestions.",
+    )
+    parser.add_argument(
+        "--eda-llm-rounds",
+        type=int,
+        default=2,
+        help="Bounded number of planner/reviewer rounds when using multi-agent EDA.",
+    )
     args = parser.parse_args()
 
     result = prepare_and_evaluate_dataset(
@@ -27,6 +47,8 @@ def main() -> None:
         random_seed=args.seed,
         use_eda_agent=args.use_eda_agent,
         eda_use_llm=args.eda_use_llm,
+        eda_llm_strategy=args.eda_llm_strategy,
+        eda_llm_rounds=args.eda_llm_rounds,
     )
     print(json.dumps(result, indent=2))
 

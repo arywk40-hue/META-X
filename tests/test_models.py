@@ -46,6 +46,20 @@ def test_action_from_llm_output_parses_json_block() -> None:
     assert action.row_index == 2
 
 
+def test_action_schema_enum_matches_runtime_validation() -> None:
+    action_names = Action.model_json_schema()["properties"]["action_type"]["enum"]
+
+    for action_name in action_names:
+        action = Action(
+            action_type=action_name,
+            row_index=0,
+            column="example_column",
+            new_value="value",
+            reason="Schema/runtime consistency check.",
+        )
+        assert action.action_type == action_name
+
+
 def test_reward_clamps_value_and_fields() -> None:
     reward = Reward(value=1.4, issues_fixed_this_step=2, issues_remaining=0, solved=True, attempts_used=1)
 

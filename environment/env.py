@@ -6,8 +6,9 @@ from abc import ABC, abstractmethod
 import copy
 from datetime import datetime, timezone
 import random
+import re
 import threading
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from .graders import grade_episode
@@ -88,6 +89,8 @@ class OpenEnv(OpenEnvBase):
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
+        self.custom_task: Task | None = None
+        self.custom_grader: Callable[[list[dict[str, Any]]], float] | None = None
         self.current_task: Task | None = None
         self.episode_id: str | None = None
         self.episode_history: list[dict[str, Any]] = []
@@ -100,9 +103,30 @@ class OpenEnv(OpenEnvBase):
         self.seed: int | None = None
         self.task_state: dict[str, Any] = {}
 
+    def set_dynamic_task(
+        self,
+        task: Task,
+        grader: Callable[[list[dict[str, Any]]], float],
+    ) -> None:
+        self.custom_task = task
+        self.custom_grader = grader
+
+    def resolve_task(self, task_id: str | None = None) -> Task:
+        if self.custom_task is not None and (task_id is None or task_id == self.custom_task.id):
+            return self.custom_task
+        if task_id is None:
+            raise ValueError("Task id is required when no dynamic task is attached.")
+        return get_task(task_id)
+
+    def grade_history(self, task_id: str, episode_history: list[dict[str, Any]]) -> float:
+        if self.custom_task is not None and self.custom_task.id == task_id and self.custom_grader is not None:
+            score = float(self.custom_grader(episode_history))
+            return round(max(0.0, min(1.0, score)), 4)
+        return grade_episode(task_id, episode_history)
+
     def reset(self, task_id: str | None = None, seed: int | None = None) -> Observation:
         with self._lock:
-            task = get_task(task_id) if task_id else self._choose_task(seed)
+            task = self.resolve_task(task_id) if (task_id or self.custom_task is not None) else self._choose_task(seed)
             self.current_task = task
             self.episode_id = str(uuid4())
             self.seed = seed
@@ -173,7 +197,7 @@ class OpenEnv(OpenEnvBase):
             self.episode_history.append(history_entry)
 
             if self.done:
-                final_score = grade_episode(self.current_task.id, self.episode_history)
+                final_score = self.grade_history(self.current_task.id, self.episode_history)
                 self.task_state["final_score"] = final_score
                 info["final_score"] = final_score
 
@@ -213,6 +237,8 @@ class OpenEnv(OpenEnvBase):
             return payload
 
     def _choose_task(self, seed: int | None) -> Task:
+        if self.custom_task is not None:
+            return self.custom_task
         return random.Random(seed).choice(list(TASKS.values()))
 
     def _issues_remaining(self) -> int:
@@ -254,6 +280,9 @@ class OpenEnv(OpenEnvBase):
                         "zero_price": {"fix_value"},
                         "invalid_date": {"fix_value", "flag_anomaly"},
                         "null": {"fill_missing", "fix_value", "flag_anomaly"},
+                        "pattern": {"extract_pattern", "replace_regex"},
+                        "categorical": {"merge_similar_categories"},
+                        "imputation": {"knn_impute", "mean_impute"},
                     }.get(issue["issue_type"], {"fix_value", "flag_anomaly"})
 
                     if atype in appropriate_types and self._value_matches_issue(issue, action.new_value):
@@ -299,6 +328,9 @@ class OpenEnv(OpenEnvBase):
             minimum = float(issue.get("min", numeric_value))
             maximum = float(issue.get("max", numeric_value))
             return minimum <= numeric_value <= maximum
+
+        if issue.get("value_type") == "iso_date":
+            return isinstance(new_value, str) and bool(re.match(r"^\d{4}-\d{2}-\d{2}$", new_value.strip()))
 
         if issue.get("correct") is not None:
             return str(new_value).strip() == str(issue["correct"]).strip()

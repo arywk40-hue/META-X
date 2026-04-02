@@ -14,6 +14,7 @@ except ImportError:  # pragma: no cover - local fallback path
     OpenAI = None
 
 from environment import Action, OpenEnv
+from environment.local_secrets import get_runtime_secret
 from environment.graders import grade_episode
 from environment.tasks import TASKS, get_task
 
@@ -36,14 +37,14 @@ class BaselineAgent:
     def __init__(
         self,
         env: OpenEnv | None = None,
-        model: str = os.getenv("MODEL_NAME", "gpt-4o-mini"),
+        model: str = get_runtime_secret("MODEL_NAME", default="gpt-4o-mini") or "gpt-4o-mini",
         use_llm: bool | None = None,
     ) -> None:
         self.env = env or OpenEnv()
         self.model = model
-        hf_token = os.getenv("HF_TOKEN")
-        api_key = os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY") or (hf_token or "")
-        base_url = os.getenv("API_BASE_URL")
+        hf_token = get_runtime_secret("HF_TOKEN")
+        api_key = get_runtime_secret("GROQ_API_KEY", "OPENAI_API_KEY", "HF_TOKEN", default="") or ""
+        base_url = get_runtime_secret("API_BASE_URL")
         self.use_llm = bool(use_llm) if use_llm is not None else bool(api_key and OpenAI)
         self.client = OpenAI(api_key=api_key, base_url=base_url) if self.use_llm and OpenAI else None
 

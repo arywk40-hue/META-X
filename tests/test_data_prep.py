@@ -68,6 +68,8 @@ def test_prepare_dataset_with_eda_agent_generates_eda_artifacts(tmp_path: Path) 
     assert payload["eda_feature_engineering_steps"] >= 1
     assert Path(payload["eda_report_path"]).exists()
     assert Path(payload["eda_markdown_path"]).exists()
+    assert Path(payload["eda_applied_path"]).exists()
+    assert payload["eda_applied_shape"]["rows"] == 4
 
 
 def test_prepare_dataset_endpoint(test_client, tmp_path: Path) -> None:

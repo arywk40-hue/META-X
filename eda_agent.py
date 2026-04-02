@@ -6,6 +6,7 @@ from environment.eda_agent import (
     EDAAgent,
     EDAReport,
     FeatureEngineeringStep,
+    LLMRoundRecord,
     main,
     write_eda_artifacts,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "EDAAgent",
     "EDAReport",
     "FeatureEngineeringStep",
+    "LLMRoundRecord",
     "write_eda_artifacts",
 ]
 

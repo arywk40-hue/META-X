@@ -15,6 +15,7 @@ from environment import (
     TASKS,
     Action,
     OpenEnv,
+    generate_task_and_grader_from_csv,
     get_task,
     grade_episode,
     prepare_and_evaluate_dataset,
@@ -24,6 +25,7 @@ from environment.models import (
     BaselineRequest,
     DatasetEvaluationRequest,
     DatasetPreparationRequest,
+    DynamicTaskRequest,
     GraderRequest,
     ResetRequest,
 )
@@ -124,11 +126,15 @@ def create_app(
         action_schema = Action.model_json_schema()
         return [{**task.summary(), "action_schema": action_schema} for task in TASKS.values()]
 
-    def grade_payload(task_id: str, episode: list[dict[str, Any]]) -> dict[str, Any]:
+    def grade_payload(task_id: str, episode: list[dict[str, Any]], env: OpenEnv | None = None) -> dict[str, Any]:
         if not episode:
             raise HTTPException(status_code=400, detail="Episode history is empty or malformed")
-        task = get_task(task_id)
-        score = grade_episode(task_id, episode)
+        if env is not None and getattr(env, "custom_task", None) is not None and env.custom_task.id == task_id:
+            task = env.custom_task
+            score = env.grade_history(task_id, episode)
+        else:
+            task = get_task(task_id)
+            score = grade_episode(task_id, episode)
         breakdown = _grader_breakdown(task_id, episode, score)
         return {
             "task_id": task_id,
@@ -158,10 +164,12 @@ def create_app(
         try:
             request = request or ResetRequest()
             active_session_id = session_id or str(uuid4())
-            env = environment_type()
-            app.state.sessions[active_session_id] = env
+            env = app.state.sessions.get(active_session_id)
+            if env is None:
+                env = environment_type()
+                app.state.sessions[active_session_id] = env
             observation = env.reset(task_id=request.task_id, seed=request.seed)
-            task = get_task(observation.task_id)
+            task = env.resolve_task(observation.task_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -169,6 +177,32 @@ def create_app(
             "session_id": active_session_id,
             "observation": observation.model_dump(mode="json"),
             "task_info": task.summary(),
+        }
+
+    @app.post("/generate-dynamic-task")
+    def generate_dynamic_task(request: DynamicTaskRequest, session_id: str | None = None) -> dict[str, Any]:
+        try:
+            task, grader = generate_task_and_grader_from_csv(
+                csv_path=request.csv_path,
+                task_id=request.task_id,
+                max_issues=request.max_issues,
+                max_preview_rows=request.max_preview_rows,
+            )
+            active_session_id = session_id or str(uuid4())
+            env = environment_type()
+            env.set_dynamic_task(task, grader)
+            app.state.sessions[active_session_id] = env
+            observation = env.reset(task_id=task.id, seed=request.seed)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return {
+            "session_id": active_session_id,
+            "observation": observation.model_dump(mode="json"),
+            "task_info": {**task.summary(), "action_schema": Action.model_json_schema()},
+            "dynamic": True,
         }
 
     @app.post("/step")
@@ -202,9 +236,9 @@ def create_app(
 
     @app.post("/grader")
     def grader(request: GraderRequest, session_id: str | None = None) -> dict[str, Any]:
-        get_session_env(session_id)
+        env = get_session_env(session_id)
         try:
-            return grade_payload(request.task_id, request.episode)
+            return grade_payload(request.task_id, request.episode, env=env)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
@@ -235,6 +269,8 @@ def create_app(
                 random_seed=request.random_seed,
                 use_eda_agent=request.use_eda_agent,
                 eda_use_llm=request.eda_use_llm,
+                eda_llm_strategy=request.eda_llm_strategy,
+                eda_llm_rounds=request.eda_llm_rounds,
             )
             return artifacts.as_dict()
         except FileNotFoundError as exc:
@@ -255,6 +291,8 @@ def create_app(
                 random_seed=request.random_seed,
                 use_eda_agent=request.use_eda_agent,
                 eda_use_llm=request.eda_use_llm,
+                eda_llm_strategy=request.eda_llm_strategy,
+                eda_llm_rounds=request.eda_llm_rounds,
             )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -283,7 +321,7 @@ def create_app(
                 if message_type == "reset":
                     request = ResetRequest.model_validate(payload)
                     observation = env.reset(task_id=request.task_id, seed=request.seed)
-                    task = get_task(observation.task_id)
+                    task = env.resolve_task(observation.task_id)
                     await websocket.send_json(
                         {
                             "type": "reset",
@@ -317,7 +355,7 @@ def create_app(
 
                 if message_type == "grader":
                     request = GraderRequest.model_validate(payload)
-                    graded = grade_payload(request.task_id, request.episode)
+                    graded = grade_payload(request.task_id, request.episode, env=env)
                     await websocket.send_json({"type": "grader", **graded})
                     continue
 

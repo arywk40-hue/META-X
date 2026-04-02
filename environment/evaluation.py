@@ -190,6 +190,8 @@ def prepare_and_evaluate_dataset(
     random_seed: int = 42,
     use_eda_agent: bool = False,
     eda_use_llm: bool = False,
+    eda_llm_strategy: str = "single_pass",
+    eda_llm_rounds: int = 2,
 ) -> dict[str, Any]:
     preparation = prepare_dataset(
         csv_path=csv_path,
@@ -199,6 +201,8 @@ def prepare_and_evaluate_dataset(
         random_seed=random_seed,
         use_eda_agent=use_eda_agent,
         eda_use_llm=eda_use_llm,
+        eda_llm_strategy=eda_llm_strategy,
+        eda_llm_rounds=eda_llm_rounds,
     )
     evaluation = evaluate_prepared_dataset(preparation, random_seed=random_seed)
     profile_payload = json.loads(Path(preparation.summary["profile_path"]).read_text())

@@ -262,6 +262,8 @@ def prepare_dataset(
     random_seed: int = 42,
     use_eda_agent: bool = False,
     eda_use_llm: bool = False,
+    eda_llm_strategy: str = "single_pass",
+    eda_llm_rounds: int = 2,
 ) -> DatasetPreparationArtifacts:
     source_path = Path(csv_path).expanduser().resolve()
     if not source_path.exists():
@@ -280,14 +282,33 @@ def prepare_dataset(
 
     eda_report = None
     eda_artifacts: dict[str, str] = {}
+    eda_applied_path: Path | None = None
+    eda_applied_shape: dict[str, int] | None = None
+    eda_added_columns: list[str] = []
+    eda_removed_columns: list[str] = []
     df = raw_df.copy()
     if use_eda_agent:
-        agent = EDAAgent(df, target_column=target_column, use_llm=eda_use_llm)
+        agent = EDAAgent(
+            df,
+            target_column=target_column,
+            use_llm=eda_use_llm,
+            llm_strategy=eda_llm_strategy,
+            max_llm_rounds=eda_llm_rounds,
+        )
         eda_report = agent.run()
         eda_artifacts = write_eda_artifacts(eda_report, destination, dataset_name)
+        pre_eda_columns = list(df.columns)
         df = eda_report.apply(df)
+        post_eda_columns = list(df.columns)
+        eda_added_columns = [column for column in post_eda_columns if column not in pre_eda_columns]
+        eda_removed_columns = [column for column in pre_eda_columns if column not in post_eda_columns]
+        eda_applied_shape = {"rows": int(len(df)), "columns": int(len(df.columns))}
+        eda_applied_path = destination / f"{dataset_name}_eda_applied.csv"
+        df.to_csv(eda_applied_path, index=False)
         steps.append(
-            f"Applied EDA agent feature engineering with {len(eda_report.feature_engineering_steps)} generated steps."
+            "Applied EDA agent feature engineering with "
+            f"{len(eda_report.feature_engineering_steps)} generated steps "
+            f"(strategy={eda_report.llm_strategy}, validated_llm_steps={eda_report.validated_llm_steps})."
         )
 
     original_shape = {"rows": int(len(df)), "columns": int(len(df.columns))}
@@ -386,9 +407,22 @@ def prepare_dataset(
         "graph_paths": report_artifacts["graph_paths"],
         "eda_enabled": use_eda_agent,
         "eda_used_llm": bool(eda_use_llm and eda_report is not None and eda_report.llm_provider != "none"),
+        "eda_llm_strategy": eda_report.llm_strategy if eda_report else "none",
+        "eda_llm_rounds_run": eda_report.llm_rounds_run if eda_report else 0,
+        "eda_llm_rounds_requested": int(eda_llm_rounds),
+        "eda_llm_candidate_steps": eda_report.llm_candidate_steps if eda_report else 0,
+        "eda_llm_provider": eda_report.llm_provider if eda_report else "none",
         "eda_summary": eda_report.agent_summary if eda_report else None,
         "eda_recommendations": eda_report.agent_recommendations if eda_report else [],
         "eda_feature_engineering_steps": len(eda_report.feature_engineering_steps) if eda_report else 0,
+        "eda_validated_llm_steps": eda_report.validated_llm_steps if eda_report else 0,
+        "eda_rejected_llm_steps": eda_report.rejected_llm_steps if eda_report else 0,
+        "eda_llm_rejection_reasons": eda_report.llm_rejection_reasons if eda_report else [],
+        "eda_llm_round_records": eda_report.to_dict()["llm_round_records"] if eda_report else [],
+        "eda_applied_path": str(eda_applied_path) if eda_applied_path else None,
+        "eda_applied_shape": eda_applied_shape,
+        "eda_added_columns": eda_added_columns,
+        "eda_removed_columns": eda_removed_columns,
         **eda_artifacts,
         "ready_for_training": True,
         "recommended_model_family": "tree_based_boosting_or_linear_baseline",
