@@ -5,7 +5,6 @@ from __future__ import annotations
 from contextlib import ExitStack
 import json
 import os
-import re
 import sys
 from typing import Any
 
@@ -24,7 +23,7 @@ HF_TOKEN = get_runtime_secret("HF_TOKEN")
 API_KEY = HF_TOKEN or get_runtime_secret("OPENAI_API_KEY", "GROQ_API_KEY", "HF_TOKEN")
 ENVIRONMENT_URL = os.getenv("ENVIRONMENT_URL", "http://127.0.0.1:8000")
 BENCHMARK = os.getenv("OPENENV_BENCHMARK", "data-cleaning-env")
-TASK_ID = os.getenv("TASK_ID", "adversarial_sensor")
+TASK_ID = os.getenv("TASK_ID")
 MAX_STEPS = int(os.getenv("MAX_STEPS", "8"))
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "256"))
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.2"))
@@ -33,7 +32,6 @@ SUCCESS_SCORE_THRESHOLD = float(os.getenv("SUCCESS_SCORE_THRESHOLD", "0.5"))
 DEBUG_INFERENCE = os.getenv("DEBUG_INFERENCE", "").strip().lower() in {"1", "true", "yes"}
 
 
-JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 SYSTEM_PROMPT = (
     "You are an expert data cleaning agent. "
     "You will be shown a dirty tabular dataset preview. "
@@ -68,8 +66,16 @@ def log_end(success: bool, steps: int, score: float, rewards: list[float]) -> No
 def strip_json_block(text: str) -> str:
     cleaned = text.strip()
     cleaned = cleaned.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    match = JSON_BLOCK_RE.search(cleaned)
-    return match.group(0).strip() if match else cleaned
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(cleaned):
+        if char != "{":
+            continue
+        try:
+            payload, _ = decoder.raw_decode(cleaned[index:])
+            return json.dumps(payload, separators=(",", ":"))
+        except json.JSONDecodeError:
+            continue
+    return cleaned
 
 
 def build_env_client(stack: ExitStack) -> Any:
@@ -87,6 +93,20 @@ def build_env_client(stack: ExitStack) -> Any:
     return local_client
 
 
+def require_mapping(value: Any, context: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"Unexpected {context}: expected object, got {type(value).__name__}")
+    return value
+
+
+def require_keys(payload: Any, required_keys: set[str], context: str) -> dict[str, Any]:
+    mapping = require_mapping(payload, context)
+    missing = sorted(key for key in required_keys if key not in mapping)
+    if missing:
+        raise ValueError(f"Unexpected {context}: missing keys {missing}")
+    return mapping
+
+
 def parse_model_action(response_text: str) -> Action:
     try:
         payload = json.loads(strip_json_block(response_text))
@@ -95,7 +115,21 @@ def parse_model_action(response_text: str) -> Action:
         return Action.from_llm_output(response_text, [])
 
 
-def fallback_action(task_id: str, step: int) -> Action:
+def _generic_fallback_action(observation: dict[str, Any]) -> Action:
+    available_actions = list(observation.get("available_actions", []))
+    action_type = "flag_anomaly" if "flag_anomaly" in available_actions else (available_actions[0] if available_actions else "flag_anomaly")
+    return Action.model_validate(
+        {
+            "action_type": action_type,
+            "row_index": 0,
+            "column": "unknown",
+            "new_value": None,
+            "reason": "generic_fallback_action",
+        }
+    )
+
+
+def fallback_action(task_id: str, step: int, observation: dict[str, Any]) -> Action:
     action_plans = {
         "null_filling": [
             {"action_type": "fill_missing", "row_index": 1, "column": "age", "new_value": "unknown", "reason": "age_missing"},
@@ -135,7 +169,9 @@ def fallback_action(task_id: str, step: int) -> Action:
             {"action_type": "fill_missing", "row_index": 3, "column": "Cabin", "new_value": "Unknown", "reason": "fill_cabin_placeholder"},
         ],
     }
-    plan = action_plans.get(task_id, action_plans["adversarial_sensor"])
+    plan = action_plans.get(task_id)
+    if plan is None:
+        return _generic_fallback_action(observation)
     return Action.model_validate(plan[min(step, len(plan) - 1)])
 
 
@@ -154,27 +190,32 @@ def format_action(action: Action) -> str:
 
 
 def choose_task(tasks: list[dict[str, Any]]) -> dict[str, Any]:
-    requested = next(
-        (
-            task
-            for task in tasks
-            if task.get("id") == TASK_ID or task.get("task_id") == TASK_ID
-        ),
-        None,
-    )
-    if requested is not None:
-        return requested
+    if not tasks:
+        raise ValueError("No tasks returned by /tasks")
+
+    if TASK_ID:
+        requested = next(
+            (
+                task
+                for task in tasks
+                if task.get("id") == TASK_ID or task.get("task_id") == TASK_ID
+            ),
+            None,
+        )
+        if requested is not None:
+            return requested
 
     preferred = next(
         (
             task
             for task in tasks
-            if task.get("id") == "adversarial_sensor" or task.get("task_id") == "adversarial_sensor"
+            if task.get("difficulty") == "hard"
         ),
         None,
     )
     if preferred is not None:
         return preferred
+
     return tasks[0]
 
 
@@ -198,28 +239,33 @@ def request_action(
     task_id: str,
     observation: dict[str, Any],
 ) -> tuple[Action, str]:
-    try:
+    last_exception: Exception | None = None
+    for _attempt in range(2):
         try:
-            completion = llm_client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=messages,
-                temperature=TEMPERATURE,
-                max_tokens=MAX_TOKENS,
-                response_format={"type": "json_object"},
-            )
-        except Exception:
-            completion = llm_client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=messages,
-                temperature=TEMPERATURE,
-                max_tokens=MAX_TOKENS,
-            )
-        response_text = completion.choices[0].message.content or ""
-        return parse_model_action(response_text), response_text
-    except Exception as exc:  # noqa: BLE001
-        if DEBUG_INFERENCE:
-            print(f"model_request_failed={exc}", file=sys.stderr, flush=True)
-        return fallback_action(task_id, int(observation["step"])), ""
+            try:
+                completion = llm_client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=messages,
+                    temperature=TEMPERATURE,
+                    max_tokens=MAX_TOKENS,
+                    response_format={"type": "json_object"},
+                )
+            except Exception:
+                completion = llm_client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=messages,
+                    temperature=TEMPERATURE,
+                    max_tokens=MAX_TOKENS,
+                )
+            response_text = completion.choices[0].message.content or ""
+            return parse_model_action(response_text), response_text
+        except Exception as exc:  # noqa: BLE001
+            last_exception = exc
+
+    if DEBUG_INFERENCE and last_exception is not None:
+        print(f"model_request_failed={last_exception}", file=sys.stderr, flush=True)
+    fallback = fallback_action(task_id, int(observation["step"]), observation)
+    return fallback, json.dumps(fallback.model_dump(mode="json"), separators=(",", ":"))
 
 
 def ensure_api_configuration() -> None:
@@ -228,7 +274,7 @@ def ensure_api_configuration() -> None:
     if not MODEL_NAME:
         raise KeyError("Set MODEL_NAME before running inference.py")
     if not API_KEY:
-        raise KeyError("Set HF_TOKEN before running inference.py")
+        raise KeyError("Set HF_TOKEN, OPENAI_API_KEY, or GROQ_API_KEY before running inference.py")
 
 
 def main() -> None:
@@ -255,9 +301,13 @@ def main() -> None:
 
             reset_response = env_client.post("/reset", json={"task_id": chosen_task_id})
             reset_response.raise_for_status()
-            reset_payload = reset_response.json()
+            reset_payload = require_keys(reset_response.json(), {"session_id", "observation"}, "reset payload")
             session_id = reset_payload["session_id"]
-            observation = reset_payload["observation"]
+            observation = require_keys(
+                reset_payload["observation"],
+                {"done", "attempts_remaining", "step", "task_name", "task_description", "dataset_preview"},
+                "reset observation",
+            )
             messages = build_messages(observation)
 
             while not observation["done"] and observation["attempts_remaining"] > 0 and steps_taken < MAX_STEPS:
@@ -270,10 +320,15 @@ def main() -> None:
                     json=action.model_dump(mode="json"),
                 )
                 step_response.raise_for_status()
-                step_payload = step_response.json()
-                observation = step_payload["observation"]
+                step_payload = require_keys(step_response.json(), {"observation", "reward", "done", "info"}, "step payload")
+                observation = require_keys(
+                    step_payload["observation"],
+                    {"done", "attempts_remaining", "step", "feedback", "issues_remaining"},
+                    "step observation",
+                )
+                reward_payload = require_keys(step_payload["reward"], {"value"}, "step reward")
 
-                reward_value = float(step_payload["reward"]["value"])
+                reward_value = float(reward_payload["value"])
                 rewards.append(reward_value)
                 steps_taken = next_step
 
@@ -307,7 +362,7 @@ def main() -> None:
 
             state_response = env_client.get("/state", params={"session_id": session_id})
             state_response.raise_for_status()
-            state_payload = state_response.json()
+            state_payload = require_keys(state_response.json(), {"episode_history", "task_id"}, "state payload")
 
             grader_response = env_client.post(
                 "/grader",
@@ -315,7 +370,7 @@ def main() -> None:
                 json={"task_id": chosen_task_id, "episode": state_payload["episode_history"]},
             )
             grader_response.raise_for_status()
-            grader_payload = grader_response.json()
+            grader_payload = require_keys(grader_response.json(), {"score"}, "grader payload")
 
             final_score = float(grader_payload["score"])
             success = bool(state_payload.get("solved", False) or final_score >= SUCCESS_SCORE_THRESHOLD)

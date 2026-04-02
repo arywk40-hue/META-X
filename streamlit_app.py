@@ -368,15 +368,15 @@ st.markdown(
 st.markdown(
     """
     <div class="metax-hero">
-      <h1>MetaX Data Prep Studio</h1>
-      <p>Upload any tabular CSV, inspect the schema, generate train-ready features, and benchmark fast baseline models in one place.</p>
+      <h1>MetaX OpenEnv Data Cleaning</h1>
+      <p>Benchmark-first OpenEnv environment for tabular data cleaning, with an optional studio layer for arbitrary CSV profiling, feature engineering, and evaluation.</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
 st.markdown(
-    "<p class='small-note'>Supported today: tabular CSV datasets for classification or regression. Image, text, and time-series specific modeling are not yet specialized.</p>",
+    "<p class='small-note'>Core submission: fixed OpenEnv benchmark tasks with rewards and graders. Demo extension: tabular CSV datasets for classification or regression through the studio workflow.</p>",
     unsafe_allow_html=True,
 )
 

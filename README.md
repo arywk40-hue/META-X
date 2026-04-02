@@ -14,9 +14,60 @@ tags:
 
 # OpenEnv Data Cleaning Environment
 
-This repository is a production-ready OpenEnv environment for real-world tabular data cleaning. It exposes a FastAPI-compatible API, deterministic graders, dense reward shaping, and a root `inference.py` runner that uses an OpenAI-compatible client for live evaluation.
+This repository is a production-ready OpenEnv environment for real-world tabular data cleaning. The core submission is an RL benchmark where agents inspect dirty tables, take structured cleaning actions, receive dense rewards and feedback, and are scored by deterministic graders across fixed easy/medium/hard tasks.
 
-It also now includes a generic dataset-preparation workflow for arbitrary CSV files. You can feed in a dataset, optionally specify a target column, and get back train-ready CSV artifacts, schema/work-queue reports, and optional EDA-agent feature engineering for unfamiliar schemas.
+Around that benchmark, the repo also includes an optional dataset-preparation studio for arbitrary CSV files. That extension is useful for demos and real datasets, but the primary submission surface remains the OpenEnv environment itself: tasks, actions, rewards, graders, and evaluation.
+
+## OpenEnv Core
+
+- `reset()` starts a fresh benchmark episode with a clean task state.
+- `step(action)` applies one structured cleaning action and returns observation, reward, done, and info.
+- `state()` exposes the current episode state, history, and score context.
+- typed `Action`, `Observation`, `Reward`, and request models live in [environment/models.py](environment/models.py)
+- the core episode engine lives in [environment/env.py](environment/env.py)
+- fixed benchmark tasks and deterministic graders live in [environment/tasks.py](environment/tasks.py) and [environment/graders.py](environment/graders.py)
+
+## Benchmark First
+
+The benchmark is the main submission target:
+
+- six fixed data-cleaning tasks across easy, medium, and hard difficulty
+- deterministic graders with bounded scores in `[0.0, 1.0]`
+- dense reward shaping with partial progress and penalties
+- stable `/tasks` output for validation and judging
+
+The dynamic CSV workflow and Streamlit interface are secondary layers built around the benchmark, not replacements for it.
+
+Determinism note:
+
+- the fixed benchmark tasks and graders do not depend on an LLM
+- the optional LLM planner/reviewer loop is limited to the studio workflow
+- even there, only validated transformations are allowed to touch the dataframe
+
+## What Makes This Different
+
+- It models a real data-cleaning workflow instead of a toy control task.
+- It combines a stable benchmark with six fixed OpenEnv tasks and a dynamic CSV-to-task bridge for unseen datasets.
+- EDA suggestions are not only displayed: validated transformations are actually executed and exported into train-ready artifacts.
+- The same repo supports benchmarking, arbitrary CSV cleaning, feature engineering, and fast baseline evaluation in one place, while keeping the OpenEnv benchmark surface clean.
+
+## Modes
+
+The project has three clear operating modes:
+
+- `Benchmark Mode`: the fixed OpenEnv benchmark exposed through `/tasks`, with deterministic graders and dense rewards.
+- `Dynamic Task Mode`: any uploaded CSV can be converted into a session-local RL cleaning episode without changing the public benchmark.
+- `Dataset Studio Mode`: an optional demo/workflow layer where arbitrary CSVs can be profiled, feature engineered, prepared, and evaluated into train-ready outputs.
+
+## Architecture At A Glance
+
+- [app.py](app.py): FastAPI/OpenEnv HTTP surface, session management, and dataset prep/eval endpoints.
+- [environment/env.py](environment/env.py): the core `reset()/step()/state()` episode engine.
+- [environment/tasks.py](environment/tasks.py) and [environment/graders.py](environment/graders.py): fixed benchmark definitions and deterministic scoring.
+- [environment/dynamic_task_generator.py](environment/dynamic_task_generator.py): arbitrary CSV -> session-local OpenEnv task generation around the fixed benchmark.
+- [environment/eda_agent.py](environment/eda_agent.py): schema-grounded EDA, validated feature engineering, and planner/reviewer orchestration.
+- [environment/data_prep.py](environment/data_prep.py) and [environment/evaluation.py](environment/evaluation.py): final dataset preparation, artifact export, and fast baseline model evaluation.
+- [streamlit_app.py](streamlit_app.py): demo UI for arbitrary tabular CSV workflows layered on top of the environment.
 
 ## Quick Start
 
@@ -28,6 +79,17 @@ uvicorn app:app --reload
 ```
 
 The API will be available at `http://127.0.0.1:8000` locally and `7860` in Hugging Face Spaces.
+
+## One-Minute Benchmark Demo
+
+Run the core benchmark path locally:
+
+```bash
+uvicorn app:app --reload
+python inference.py
+```
+
+That starts the OpenEnv server, runs the submission baseline against the fixed benchmark, and emits the required `[START] / [STEP] / [END]` logs.
 
 ## Transport
 
@@ -70,6 +132,53 @@ HOST=0.0.0.0 PORT=7860 WORKERS=2 MAX_CONCURRENT_ENVS=128 uvicorn app:app --host 
 - `baseline/`: baseline runner with heuristic fallback and OpenAI integration.
 - `scripts/validate.py`: smoke validation for metadata, graders, and endpoints.
 - `tests/`: unit and integration coverage for the template.
+
+### Repository Layout
+
+This repo is intentionally organized so judges can find the submission-critical pieces first:
+
+```text
+metax/
+├── README.md                  # submission overview and usage
+├── openenv.yaml               # OpenEnv manifest
+├── Dockerfile                 # HF Spaces / container entrypoint
+├── inference.py               # submission baseline script
+├── app.py                     # FastAPI/OpenEnv HTTP surface
+├── streamlit_app.py           # demo UI for arbitrary CSV datasets
+├── prepare_dataset.py         # CLI: prepare any CSV
+├── prepare_and_evaluate.py    # CLI: prepare + score any CSV
+├── environment/
+│   ├── models.py              # typed OpenEnv + dataset request models
+│   ├── env.py                 # reset()/step()/state() implementation
+│   ├── tasks.py               # fixed benchmark tasks
+│   ├── graders.py             # deterministic graders
+│   ├── reward.py              # dense reward shaping
+│   ├── dynamic_task_generator.py
+│   ├── eda_agent.py
+│   ├── data_prep.py
+│   ├── evaluation.py
+│   └── reporting.py
+├── baseline/
+│   └── inference.py           # internal heuristic smoke baseline
+├── scripts/
+│   ├── validate.py
+│   └── validate-submission.sh
+├── tests/
+│   └── ...
+└── data/
+    └── kaggle/
+```
+
+### Submission Surface
+
+If a reviewer only reads a few files, start here:
+
+- [openenv.yaml](openenv.yaml)
+- [inference.py](inference.py)
+- [app.py](app.py)
+- [environment/env.py](environment/env.py)
+- [environment/tasks.py](environment/tasks.py)
+- [environment/graders.py](environment/graders.py)
 
 ## Benchmark
 
@@ -153,6 +262,13 @@ Required submission environment variables:
 - `HF_TOKEN`
 
 Local developer convenience fallbacks still work for compatible providers, but the submission path is built around `HF_TOKEN`.
+
+If you are using an OpenAI-compatible provider such as Groq, the safest submission configuration is:
+
+- keep using the `OpenAI(...)` client in [inference.py](inference.py)
+- set `API_BASE_URL` to your provider's OpenAI-compatible endpoint
+- set `MODEL_NAME` to the provider model name
+- put the active provider key into `HF_TOKEN` for submission-time compatibility
 
 ### Required STDOUT Format
 
@@ -258,7 +374,7 @@ curl -X POST http://127.0.0.1:8000/prepare-dataset \
 
 ## EDA Agent
 
-The repo now includes a standalone EDA agent in [eda_agent.py](/Users/ariyanbhakat/Desktop/metax/eda_agent.py) and [environment/eda_agent.py](/Users/ariyanbhakat/Desktop/metax/environment/eda_agent.py).
+The repo now includes a standalone EDA agent in [eda_agent.py](eda_agent.py) and [environment/eda_agent.py](environment/eda_agent.py).
 
 It does three useful things for arbitrary new datasets:
 
