@@ -42,7 +42,8 @@ def validate_inference_script() -> None:
     _check("API_BASE_URL" in contents, "inference.py references API_BASE_URL")
     _check("MODEL_NAME" in contents, "inference.py references MODEL_NAME")
     _check("HF_TOKEN" in contents, "inference.py references HF_TOKEN")
-    _check("OPENAI_API_KEY" in contents, "inference.py supports OPENAI_API_KEY fallback")
+    # The hackathon runner contract is provider-agnostic; this repo's inference.py may choose
+    # to require HF_TOKEN only. Don't enforce an OPENAI_API_KEY fallback string.
     _check("OpenAI(" in contents, "inference.py uses the OpenAI client")
     _check("[START]" in contents, "inference.py emits [START] logs")
     _check("[STEP]" in contents, "inference.py emits [STEP] logs")

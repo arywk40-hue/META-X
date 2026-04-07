@@ -13,14 +13,14 @@ from fastapi.testclient import TestClient
 from openai import OpenAI
 
 from app import create_app
-from environment.local_secrets import get_runtime_secret
 from environment.models import Action
 
 
-API_BASE_URL = get_runtime_secret("API_BASE_URL", default="https://router.huggingface.co/v1")
-MODEL_NAME = get_runtime_secret("MODEL_NAME", default="Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN = get_runtime_secret("HF_TOKEN")
-API_KEY = HF_TOKEN or get_runtime_secret("OPENAI_API_KEY", "GROQ_API_KEY", "HF_TOKEN")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4.1-mini")
+HF_TOKEN = os.getenv("HF_TOKEN")
+if HF_TOKEN is None or not HF_TOKEN.strip():
+    raise ValueError("HF_TOKEN environment variable is required")
 ENVIRONMENT_URL = os.getenv("ENVIRONMENT_URL", "http://127.0.0.1:8000")
 BENCHMARK = os.getenv("OPENENV_BENCHMARK", "data-cleaning-env")
 TASK_ID = os.getenv("TASK_ID")
@@ -117,7 +117,11 @@ def parse_model_action(response_text: str) -> Action:
 
 def _generic_fallback_action(observation: dict[str, Any]) -> Action:
     available_actions = list(observation.get("available_actions", []))
-    action_type = "flag_anomaly" if "flag_anomaly" in available_actions else (available_actions[0] if available_actions else "flag_anomaly")
+    action_type = (
+        "flag_anomaly"
+        if "flag_anomaly" in available_actions
+        else (available_actions[0] if available_actions else "flag_anomaly")
+    )
     return Action.model_validate(
         {
             "action_type": action_type,
@@ -206,11 +210,7 @@ def choose_task(tasks: list[dict[str, Any]]) -> dict[str, Any]:
             return requested
 
     preferred = next(
-        (
-            task
-            for task in tasks
-            if task.get("difficulty") == "hard"
-        ),
+        (task for task in tasks if task.get("difficulty") == "hard"),
         None,
     )
     if preferred is not None:
@@ -273,14 +273,14 @@ def ensure_api_configuration() -> None:
         raise KeyError("Set API_BASE_URL before running inference.py")
     if not MODEL_NAME:
         raise KeyError("Set MODEL_NAME before running inference.py")
-    if not API_KEY:
-        raise KeyError("Set HF_TOKEN, OPENAI_API_KEY, or GROQ_API_KEY before running inference.py")
+    if not HF_TOKEN or not HF_TOKEN.strip():
+    raise KeyError("Set HF_TOKEN before running inference.py")
 
 
 def main() -> None:
     ensure_api_configuration()
 
-    llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    llm_client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
     rewards: list[float] = []
     steps_taken = 0
     final_score = 0.0
@@ -301,7 +301,11 @@ def main() -> None:
 
             reset_response = env_client.post("/reset", json={"task_id": chosen_task_id})
             reset_response.raise_for_status()
-            reset_payload = require_keys(reset_response.json(), {"session_id", "observation"}, "reset payload")
+            reset_payload = require_keys(
+                reset_response.json(),
+                {"session_id", "observation"},
+                "reset payload",
+            )
             session_id = reset_payload["session_id"]
             observation = require_keys(
                 reset_payload["observation"],
@@ -310,7 +314,11 @@ def main() -> None:
             )
             messages = build_messages(observation)
 
-            while not observation["done"] and observation["attempts_remaining"] > 0 and steps_taken < MAX_STEPS:
+            while (
+                not observation["done"]
+                and observation["attempts_remaining"] > 0
+                and steps_taken < MAX_STEPS
+            ):
                 next_step = steps_taken + 1
                 action, response_text = request_action(llm_client, messages, chosen_task_id, observation)
 
@@ -320,7 +328,11 @@ def main() -> None:
                     json=action.model_dump(mode="json"),
                 )
                 step_response.raise_for_status()
-                step_payload = require_keys(step_response.json(), {"observation", "reward", "done", "info"}, "step payload")
+                step_payload = require_keys(
+                    step_response.json(),
+                    {"observation", "reward", "done", "info"},
+                    "step payload",
+                )
                 observation = require_keys(
                     step_payload["observation"],
                     {"done", "attempts_remaining", "step", "feedback", "issues_remaining"},
@@ -340,7 +352,11 @@ def main() -> None:
                     error=None,
                 )
 
-                if observation["done"] or observation["attempts_remaining"] <= 0 or steps_taken >= MAX_STEPS:
+                if (
+                    observation["done"]
+                    or observation["attempts_remaining"] <= 0
+                    or steps_taken >= MAX_STEPS
+                ):
                     break
 
                 assistant_turn = (
@@ -362,7 +378,11 @@ def main() -> None:
 
             state_response = env_client.get("/state", params={"session_id": session_id})
             state_response.raise_for_status()
-            state_payload = require_keys(state_response.json(), {"episode_history", "task_id"}, "state payload")
+            state_payload = require_keys(
+                state_response.json(),
+                {"episode_history", "task_id"},
+                "state payload",
+            )
 
             grader_response = env_client.post(
                 "/grader",
@@ -374,12 +394,13 @@ def main() -> None:
 
             final_score = float(grader_payload["score"])
             success = bool(state_payload.get("solved", False) or final_score >= SUCCESS_SCORE_THRESHOLD)
+
         except Exception as exc:  # noqa: BLE001
             if DEBUG_INFERENCE:
                 print(f"inference_failed={exc}", file=sys.stderr, flush=True)
         finally:
             if not logged_start:
-                log_start(task=TASK_ID, env=BENCHMARK, model=MODEL_NAME)
+                log_start(task=str(TASK_ID), env=BENCHMARK, model=MODEL_NAME)
             log_end(success=success, steps=steps_taken, score=final_score, rewards=rewards)
 
 

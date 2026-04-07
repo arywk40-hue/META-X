@@ -491,4 +491,3 @@ That script checks:
 2. `docker build`
 3. `openenv validate`
 
-If `docker` is not installed on your machine, install Docker first and rerun the script.
