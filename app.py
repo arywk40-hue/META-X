@@ -271,6 +271,14 @@ def create_app(
                 eda_use_llm=request.eda_use_llm,
                 eda_llm_strategy=request.eda_llm_strategy,
                 eda_llm_rounds=request.eda_llm_rounds,
+                task_type=request.task_type,
+                mode=request.mode,
+                split_strategy=request.split_strategy,
+                group_column=request.group_column,
+                time_column=request.time_column,
+                id_columns=request.id_columns,
+                exclude_columns=request.exclude_columns,
+                ratio_features=request.ratio_features,
             )
             return artifacts.as_dict()
         except FileNotFoundError as exc:
@@ -293,6 +301,17 @@ def create_app(
                 eda_use_llm=request.eda_use_llm,
                 eda_llm_strategy=request.eda_llm_strategy,
                 eda_llm_rounds=request.eda_llm_rounds,
+                task_type=request.task_type,
+                mode=request.mode,
+                split_strategy=request.split_strategy,
+                group_column=request.group_column,
+                time_column=request.time_column,
+                id_columns=request.id_columns,
+                exclude_columns=request.exclude_columns,
+                ratio_features=request.ratio_features,
+                scoring=request.scoring,
+                cv_folds=request.cv_folds,
+                refit_final=request.refit_final,
             )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

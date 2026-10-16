@@ -347,16 +347,20 @@ python prepare_dataset.py \
 
 This writes:
 
-- `*_prepared_full.csv`
+- `*_prepared_full.csv`: the full-data refit, used only for final training
 - `*_prepared_train.csv`
 - `*_prepared_valid.csv`
 - `*_feature_manifest.json`
+- `*_preprocessor.json`: preprocessing state fitted on training rows
+- `*_preprocessor_full.json`: preprocessing state fitted on all labelled rows, for final training and inference
 - `reports/*_profile.json`
 - `reports/*_work_queue.json`
 - `reports/*_report.md`
 - `reports/*_report.tex`
 - `reports/graphs/*.svg`
 - `reports/*_eda_report.json` and `reports/*_eda_report.md` when the EDA agent is enabled
+
+The prepared CSVs keep a `source_row` column and any `--id-column` columns next to the features. Those columns identify rows. They are not features.
 
 There is also an HTTP endpoint:
 
@@ -412,7 +416,7 @@ python prepare_and_evaluate.py \
   --use-eda-agent
 ```
 
-This writes the prepared CSVs plus an evaluation report that ranks candidate models on the validation split.
+This writes the prepared CSVs, the `*_preprocessor.json` and `*_preprocessor_full.json` state files, and an evaluation report. The report ranks models by one explicit metric on the validation rows. Models that failed are listed in their own section.
 
 API version:
 
@@ -427,6 +431,73 @@ curl -X POST http://127.0.0.1:8000/prepare-and-evaluate \
     "eda_use_llm": false
   }'
 ```
+
+## Train-only competition workflow
+
+This workflow prepares a labelled training CSV for a competition whose test file arrives later. Preprocessing is fitted on training rows only, so validation and test statistics do not leak into training.
+
+A competition usually gives you one labelled CSV and an unlabelled test CSV. If you fill missing values or encode categories on the whole file, validation rows influence the training features. META-X splits the raw rows first, then learns these values from training rows only:
+
+- median and mode fills
+- clipping bounds
+- one-hot category lists and frequency maps
+- which columns become dates
+- text-length features
+- identifier columns to drop
+- all-missing columns to drop
+
+Validation and future test rows are transformed with those stored values, unchanged.
+
+Pass `--split-strategy auto|stratified|random|group|time`. `auto` uses stratified splits for classification and random splits for regression. It switches to `group` when `--group-column` is set, and to `time` when `--time-column` is set.
+
+Group splits keep every row of a borrower or other entity on one side of the split. Time splits put the latest timestamps in validation and never split rows that share a timestamp. Use `--validation-fraction 0.2` for an 80/20 split or `0.4` for 60/40. The group and time columns travel with the IDs. They are not used as features.
+
+At transform time, a category that never appeared in training becomes an all-zero one-hot row with frequency 0. The manifest counts these under `unseen_categories_in_valid`. A missing input column raises an error. Missing booleans stay missing: `1`, `0`, or `NaN` depending on the value, plus a `__was_missing` indicator column.
+
+Duplicate rows are removed from training rows only. Validation and inference rows are never dropped.
+
+The EDA agent and any LLM-generated feature code see training features only, with no target and no IDs. Steps that reference the target or an ID name are rejected. Steps whose output for a row depends on other rows are also rejected, because they would leak statistics across rows.
+
+Set the task and metric explicitly with `--task-type` and `--scoring` (`auto`, `roc_auc`, `accuracy`, `f1_macro`, `log_loss`, `r2`, `rmse`, or `mae`). If the metric cannot be computed on the validation split, the run stops with an `Invalid validation split` error. For example, ROC-AUC fails when validation contains one class. The run does not switch to another metric.
+
+`--cv-folds K` refits preprocessing inside every fold, using all labelled rows and the same split strategy. Time splits use expanding windows over distinct timestamps. `--refit-final` then fits the best model on all labelled rows and saves it as `*_final_model.joblib`. The script does not score that model.
+
+Credit-scoring mode (`--mode credit_scoring`) requires a binary target, 0 or 1, where 1 means default within 24 months. The target column name stays configurable with `--target`. Models are selected by ROC-AUC only.
+
+Column names that look like post-loan outcomes, such as recoveries, collections, charge-off, settlement, loan_status, or last_payment, are flagged under `possible_post_outcome_columns` for review. Remove them with `--exclude-column`.
+
+Ratio features such as debt/income are opt-in with `--ratio-feature debt:income`. Add one only after you confirm what both columns mean and that both are known at prediction time.
+
+The whole workflow runs deterministically. It needs no LLM and no API key.
+
+Credit-scoring run with 5-fold CV and a final refit:
+
+```bash
+python prepare_and_evaluate.py \
+  --csv data/train.csv \
+  --target default_24m \
+  --mode credit_scoring \
+  --id-column customer_id \
+  --validation-fraction 0.2 \
+  --cv-folds 5 \
+  --refit-final \
+  --output-dir outputs/credit
+```
+
+A borrower-grouped variant adds `--group-column borrower_id`. A chronological variant adds `--time-column application_date`.
+
+Transform the competition test file with the full-data state. Customer IDs keep their original order:
+
+```bash
+python prepare_dataset.py \
+  --csv data/test.csv \
+  --apply-state outputs/credit/train_preprocessor_full.json \
+  --output outputs/credit/test_features.csv
+```
+
+The state file stores the EDA feature code and runs it again when loaded. Load only state files you produced yourself.
+
+Column batches in the work queue only organise EDA review. They are not train/validation splits.
 
 ## Dynamic OpenEnv Tasks From Any CSV
 

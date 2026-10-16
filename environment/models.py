@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from enum import Enum
 import json
 import re
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -279,6 +279,14 @@ class DatasetPreparationRequest(BaseModel):
     eda_use_llm: bool = False
     eda_llm_strategy: str = "single_pass"
     eda_llm_rounds: int = Field(default=2, ge=1, le=3)
+    task_type: Literal["auto", "classification", "regression"] = "auto"
+    mode: Literal["general", "credit_scoring"] = "general"
+    split_strategy: Literal["auto", "stratified", "random", "group", "time"] = "auto"
+    group_column: str | None = None
+    time_column: str | None = None
+    id_columns: list[str] | None = Field(default_factory=list)
+    exclude_columns: list[str] | None = Field(default_factory=list)
+    ratio_features: list[str] | None = Field(default_factory=list)
 
 
 class DatasetEvaluationRequest(BaseModel):
@@ -291,6 +299,17 @@ class DatasetEvaluationRequest(BaseModel):
     eda_use_llm: bool = False
     eda_llm_strategy: str = "single_pass"
     eda_llm_rounds: int = Field(default=2, ge=1, le=3)
+    task_type: Literal["auto", "classification", "regression"] = "auto"
+    mode: Literal["general", "credit_scoring"] = "general"
+    split_strategy: Literal["auto", "stratified", "random", "group", "time"] = "auto"
+    group_column: str | None = None
+    time_column: str | None = None
+    id_columns: list[str] | None = Field(default_factory=list)
+    exclude_columns: list[str] | None = Field(default_factory=list)
+    ratio_features: list[str] | None = Field(default_factory=list)
+    scoring: Literal["auto", "roc_auc", "accuracy", "f1_macro", "log_loss", "r2", "rmse", "mae"] = "auto"
+    cv_folds: int = Field(default=0, ge=0, le=10)
+    refit_final: bool = False
 
 
 class DynamicTaskRequest(BaseModel):

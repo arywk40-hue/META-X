@@ -111,17 +111,13 @@ class EDAReport:
     llm_rejection_reasons: list[str] | None = None
     llm_round_records: list[LLMRoundRecord] | None = None
 
-    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Execute proposed feature-engineering steps against a DataFrame."""
-        transformed = df.copy()
-        for step in self.feature_engineering_steps:
-            try:
-                local_ns: dict[str, Any] = {"df": transformed, "pd": pd, "np": np}
-                exec(step.code, local_ns, local_ns)  # noqa: S102
-                transformed = local_ns["df"]
-            except Exception as exc:  # pragma: no cover - defensive path
-                print(f"  [EDAAgent] Skipped step '{step.description}': {exc}")
-        return transformed
+    def apply(self, df: pd.DataFrame, strict: bool = False) -> pd.DataFrame:
+        """Execute proposed feature-engineering steps against a DataFrame.
+
+        With strict=True a failing step raises instead of being skipped, so the
+        caller never receives a silently different feature set.
+        """
+        return apply_feature_steps(df, self.feature_engineering_steps, strict=strict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -161,6 +157,24 @@ class EDAReport:
                 for record in (self.llm_round_records or [])
             ],
         }
+
+
+def apply_feature_steps(
+    df: pd.DataFrame,
+    steps: list[FeatureEngineeringStep],
+    strict: bool = False,
+) -> pd.DataFrame:
+    transformed = df.copy()
+    for step in steps:
+        try:
+            local_ns: dict[str, Any] = {"df": transformed, "pd": pd, "np": np}
+            exec(step.code, local_ns, local_ns)  # noqa: S102
+            transformed = local_ns["df"]
+        except Exception as exc:
+            if strict:
+                raise ValueError(f"Feature step '{step.description}' failed: {exc}") from exc
+            print(f"  [EDAAgent] Skipped step '{step.description}': {exc}")
+    return transformed
 
 
 def _infer_task_type(df: pd.DataFrame, target: str | None) -> str:
@@ -394,33 +408,9 @@ def _heuristic_feature_steps(df: pd.DataFrame, target: str | None, profiles: lis
             )
         )
 
-    high_cardinality_columns = [
-        profile.name
-        for profile in profiles
-        if profile.name != target and profile.top_categories is not None and profile.n_unique > 20
-    ]
-    if high_cardinality_columns:
-        code = textwrap.dedent(
-            f"""
-            for column in {high_cardinality_columns!r}:
-                try:
-                    freq_name = f"{{column}}__eda_freq"
-                    if freq_name not in df.columns:
-                        frequencies = df[column].astype(str).value_counts(normalize=True)
-                        df[freq_name] = df[column].astype(str).map(frequencies).fillna(0.0)
-                except Exception:
-                    continue
-            df
-            """
-        ).strip()
-        steps.append(
-            FeatureEngineeringStep(
-                description="Add frequency encodings for high-cardinality categoricals",
-                rationale="Frequency features help when new datasets arrive with many categories and no fixed column assumptions.",
-                code=code,
-            )
-        )
-
+    # Frequency encoding is deliberately not a step here: a step recomputes its
+    # statistics on whatever rows it runs on, so it would leak validation stats.
+    # data_prep fits frequency maps on training rows instead.
     return steps[:5]
 
 
@@ -708,10 +698,44 @@ def _build_reviewer_payload(
     ).strip()
 
 
+def _run_step_code(df: pd.DataFrame, code: str) -> Any:
+    local_ns: dict[str, Any] = {"df": df.copy(), "pd": pd, "np": np}
+    exec(code, local_ns, local_ns)  # noqa: S102
+    return local_ns.get("df")
+
+
+def _is_row_independent(df: pd.DataFrame, code: str, transformed: pd.DataFrame) -> bool:
+    """A step must compute each row from that row alone.
+
+    Steps that use statistics over other rows (means, value counts, ranks) give
+    different answers on validation or inference rows, so they are rejected.
+    """
+    if len(df) < 2:
+        return True
+    subset = df.iloc[::2]
+    try:
+        subset_result = _run_step_code(subset, code)
+    except Exception:
+        return False
+    if not isinstance(subset_result, pd.DataFrame) or list(subset_result.columns) != list(transformed.columns):
+        return False
+    expected = transformed.loc[subset.index]
+    try:
+        pd.testing.assert_frame_equal(
+            subset_result.reset_index(drop=True),
+            expected.reset_index(drop=True),
+            check_dtype=False,
+        )
+    except AssertionError:
+        return False
+    return True
+
+
 def _validate_feature_step(
     df: pd.DataFrame,
     target: str | None,
     step: FeatureEngineeringStep,
+    protected_columns: list[str] | None = None,
 ) -> tuple[bool, str, FeatureEngineeringStep, pd.DataFrame | None]:
     code = _sanitize_feature_code(step.code)
     if not step.description.strip() or not step.rationale.strip() or not code:
@@ -721,17 +745,17 @@ def _validate_feature_step(
         return False, "Blocked unsafe token in code.", step, None
     if not _is_safe_ast(code):
         return False, "Code failed safety AST validation.", step, None
+    for name in protected_columns or []:
+        if re.search(rf"""['"]{re.escape(name)}['"]""", code):
+            return False, f"References protected column '{name}'.", step, None
 
-    candidate = df.copy()
-    original_rows = len(candidate)
-    original_columns = list(candidate.columns)
-    local_ns: dict[str, Any] = {"df": candidate, "pd": pd, "np": np}
+    original_rows = len(df)
+    original_columns = list(df.columns)
     try:
-        exec(code, local_ns, local_ns)  # noqa: S102
+        transformed = _run_step_code(df, code)
     except Exception as exc:
         return False, f"Execution failed: {exc}", step, None
 
-    transformed = local_ns.get("df")
     if not isinstance(transformed, pd.DataFrame):
         return False, "Step did not return a DataFrame.", step, None
     if len(transformed) != original_rows:
@@ -740,8 +764,12 @@ def _validate_feature_step(
         return False, "Produced duplicate column names.", step, None
     if target and target in original_columns and target not in transformed.columns:
         return False, "Dropped the target column.", step, None
+    if any(name in transformed.columns and name not in original_columns for name in protected_columns or []):
+        return False, "Created a column named like a protected column.", step, None
     if transformed.shape[1] < max(1, len(original_columns) // 2):
         return False, "Dropped too many columns.", step, None
+    if not _is_row_independent(df, code, transformed):
+        return False, "Output depends on other rows (would leak statistics across splits).", step, None
     return (
         True,
         "accepted",
@@ -759,6 +787,7 @@ def _validated_llm_steps(
     target: str | None,
     raw_steps: list[dict[str, Any]],
     existing_descriptions: set[str] | None = None,
+    protected_columns: list[str] | None = None,
 ) -> tuple[list[FeatureEngineeringStep], int, list[str], pd.DataFrame]:
     accepted: list[FeatureEngineeringStep] = []
     rejected = 0
@@ -776,7 +805,9 @@ def _validated_llm_steps(
         if description_key and description_key in seen_descriptions:
             continue
 
-        is_valid, reason, validated_step, transformed = _validate_feature_step(working_df, target, step)
+        is_valid, reason, validated_step, transformed = _validate_feature_step(
+            working_df, target, step, protected_columns=protected_columns
+        )
         if is_valid:
             accepted.append(validated_step)
             working_df = transformed if transformed is not None else working_df
@@ -810,6 +841,7 @@ def _run_planner_reviewer_loop(
     heuristic_steps: list[FeatureEngineeringStep],
     base_recommendations: list[str],
     max_rounds: int,
+    protected_columns: list[str] | None = None,
 ) -> dict[str, Any]:
     accepted_steps: list[FeatureEngineeringStep] = []
     working_df = df.copy()
@@ -866,6 +898,7 @@ def _run_planner_reviewer_loop(
             target,
             reviewer_steps,
             existing_descriptions={step.description for step in accepted_steps},
+            protected_columns=protected_columns,
         )
         accepted_steps.extend(validated_steps)
         rejection_reasons.extend(round_rejections)
@@ -1010,9 +1043,12 @@ class EDAAgent:
         use_llm: bool = True,
         llm_strategy: str = "single_pass",
         max_llm_rounds: int = 2,
+        protected_columns: list[str] | None = None,
     ) -> None:
         self.df = df.copy()
         self.target = target_column
+        # Names generated code may not reference or create: the label and IDs.
+        self.protected_columns = list(protected_columns or ([target_column] if target_column else []))
         self.use_llm = use_llm
         self.llm_strategy = llm_strategy.strip().lower() if llm_strategy else "single_pass"
         self.max_llm_rounds = max(1, min(int(max_llm_rounds), 3))
@@ -1058,6 +1094,7 @@ class EDAAgent:
                         heuristic_steps=feature_steps,
                         base_recommendations=agent_recommendations,
                         max_rounds=self.max_llm_rounds,
+                        protected_columns=self.protected_columns,
                     )
                     llm_strategy = "planner_reviewer"
                     llm_provider = str(loop_result["llm_provider"])
@@ -1094,6 +1131,7 @@ class EDAAgent:
                         self.df,
                         self.target,
                         raw_steps,
+                        protected_columns=self.protected_columns,
                     )
                     validated_llm_steps = len(validated_steps)
                     feature_steps = _merge_feature_steps(feature_steps, validated_steps)
